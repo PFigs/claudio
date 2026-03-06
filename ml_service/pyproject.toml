@@ -1,0 +1,19 @@
+[project]
+name = "ok-claude-ml"
+version = "0.1.0"
+description = "ML inference service for ok_claude (STT, TTS, VAD)"
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper>=1.0",
+    "piper-tts>=1.4",
+    "numpy>=1.24",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+]
+
+[project.scripts]
+ok-claude-ml = "ok_claude_ml.server:main"
+
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10.0"]
+build-backend = "uv_build"

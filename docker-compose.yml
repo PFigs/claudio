@@ -1,0 +1,19 @@
+services:
+  claudio:
+    build: .
+    container_name: claudio
+    restart: unless-stopped
+    # Audio device access
+    devices:
+      - /dev/snd:/dev/snd
+    # Input devices for PTT
+    volumes:
+      - /dev/input:/dev/input:ro
+      - ${HOME}/.config/ok_claude:/root/.config/ok_claude
+      - ${HOME}/.local/share/claudio:/root/.local/share/claudio
+      - ${HOME}/.local/share/piper:/root/.local/share/piper
+    # Needed for evdev and audio
+    privileged: true
+    environment:
+      - PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
+    network_mode: host

@@ -1,0 +1,10 @@
+/target
+.cargo/config.toml
+.claude/
+/dist
+ml_service/.venv/
+ml_service/uv.lock
+__pycache__/
+*.pyc
+*.egg-info/
+.env

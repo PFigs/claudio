@@ -1,0 +1,36 @@
+[package]
+name = "ok_claude"
+version = "0.1.0"
+edition = "2024"
+description = "Voice-activated terminal session manager for Claude Code"
+license = "MIT"
+repository = "https://github.com/PFigs/claudio"
+readme = "README.md"
+authors = ["PFigs"]
+keywords = ["voice", "terminal", "claude", "tts", "stt"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "claudio"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+cpal = "0.15"
+evdev = "0.12"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+toml = "0.8"
+dirs = "6"
+uuid = { version = "1", features = ["v4"] }
+byteorder = "1"
+libc = "0.2"
+portable-pty = "0.9"
+gpui = "0.2"
+gpui-terminal = { path = "gpui-terminal" }
+flume = "0.11"
+notify-rust = "4"
