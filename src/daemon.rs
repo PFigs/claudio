@@ -135,6 +135,7 @@ async fn run_with_ml(
         let mut speech_buffer: Vec<i16> = Vec::new();
         let mut was_pressed = false;
         let mut was_speaking = false;
+        let mut had_mid_flush = false;
 
         loop {
             let chunk = match audio_rx.recv().await {
@@ -145,19 +146,21 @@ async fn run_with_ml(
             let ptt_active = *pipeline_ptt.borrow();
 
             if !ptt_active {
-                if was_pressed && !speech_buffer.is_empty() {
+                if was_pressed {
                     if was_speaking {
                         let _ = pipeline_event_tx.send(DaemonEvent::VadState { speaking: false });
                         was_speaking = false;
                     }
-                    // PTT just released -- flush whatever we have
-                    let audio = std::mem::take(&mut speech_buffer);
-                    if let Err(e) =
-                        handle_utterance(&audio, &pipeline_ml, &pipeline_mgr, &pipeline_event_tx)
-                            .await
-                    {
-                        warn!("Utterance handling error: {e}");
+                    if !speech_buffer.is_empty() {
+                        let audio = std::mem::take(&mut speech_buffer);
+                        if let Err(e) =
+                            handle_utterance(&audio, &pipeline_ml, &pipeline_mgr, &pipeline_event_tx, false)
+                                .await
+                        {
+                            warn!("Utterance handling error: {e}");
+                        }
                     }
+                    had_mid_flush = false;
                 }
                 was_pressed = false;
                 continue;
@@ -166,6 +169,7 @@ async fn run_with_ml(
             if !was_pressed {
                 // PTT just pressed -- start fresh
                 was_speaking = false;
+                had_mid_flush = false;
             }
             was_pressed = true;
 
@@ -185,13 +189,16 @@ async fn run_with_ml(
                     if status == VAD_SPEECH_END && !speech_buffer.is_empty() {
                         was_speaking = false;
                         let _ = pipeline_event_tx.send(DaemonEvent::VadState { speaking: false });
+                        // Mid-speech flush: import text without entering
+                        had_mid_flush = true;
                         let audio = std::mem::take(&mut speech_buffer);
-                        drop(ml); // Release lock before handling
+                        drop(ml);
                         if let Err(e) = handle_utterance(
                             &audio,
                             &pipeline_ml,
                             &pipeline_mgr,
                             &pipeline_event_tx,
+                            false,
                         )
                         .await
                         {
@@ -227,6 +234,7 @@ async fn handle_utterance(
     ml: &Arc<Mutex<MlBridgeClient>>,
     manager: &Arc<Mutex<SessionManager>>,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    enter: bool,
 ) -> Result<()> {
     let pcm_bytes = samples_to_bytes(audio);
     let text = ml.lock().await.transcribe(&pcm_bytes).await?;
@@ -255,6 +263,7 @@ async fn handle_utterance(
     let _ = event_tx.send(DaemonEvent::Transcription {
         session_id: session_id.clone(),
         text: text.clone(),
+        enter,
     });
 
     Ok(())

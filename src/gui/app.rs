@@ -26,6 +26,8 @@ pub struct ClaudioApp {
     pending_session_cwds: VecDeque<PathBuf>,
     pub renaming_session_id: Option<String>,
     pub rename_input: String,
+    pub file_tree_width: f32,
+    file_tree_resizing: bool,
 }
 
 impl ClaudioApp {
@@ -79,6 +81,8 @@ impl ClaudioApp {
             pending_session_cwds: VecDeque::new(),
             renaming_session_id: None,
             rename_input: String::new(),
+            file_tree_width: 250.0,
+            file_tree_resizing: false,
         }
     }
 
@@ -102,11 +106,16 @@ impl ClaudioApp {
                 self.vad_speaking = speaking;
                 cx.notify();
             }
-            DaemonEvent::Transcription { session_id, text } => {
-                self.last_transcription = Some(text.clone());
-                // Write transcription to the focused session's PTY
+            DaemonEvent::Transcription { session_id, text, .. } => {
+                if !text.is_empty() {
+                    self.last_transcription = Some(text.clone());
+                }
                 if let Some(session) = self.sessions.iter().find(|s| s.id == session_id) {
-                    session.write_transcription(&text);
+                    if !text.is_empty() {
+                        // Write text to terminal without auto-submitting.
+                        // User reviews and presses Enter manually.
+                        session.write_raw(&text);
+                    }
                 }
                 cx.notify();
             }
@@ -523,10 +532,32 @@ impl Render for ClaudioApp {
             .bg(rgb(super::theme::BASE))
             .text_color(rgb(super::theme::TEXT))
             .child(self.render_status_bar(window, cx))
+            .on_mouse_move(cx.listener(|app, ev: &MouseMoveEvent, _window, cx| {
+                if app.file_tree_resizing {
+                    let x: f32 = ev.position.x.into();
+                    app.file_tree_width = x.clamp(120.0, 600.0);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|app, _ev: &MouseUpEvent, _window, _cx| {
+                app.file_tree_resizing = false;
+            }))
             .child({
                 let mut content = div().flex_1().flex().flex_row();
                 if self.file_tree.visible {
                     content = content.child(self.render_file_tree(window, cx));
+                    // Resize handle
+                    content = content.child(
+                        div()
+                            .w(px(4.0))
+                            .h_full()
+                            .cursor_col_resize()
+                            .bg(rgb(super::theme::SURFACE0))
+                            .hover(|s| s.bg(rgb(super::theme::BLUE)))
+                            .on_mouse_down(MouseButton::Left, cx.listener(|app, _ev: &MouseDownEvent, _window, _cx| {
+                                app.file_tree_resizing = true;
+                            })),
+                    );
                 }
                 content = content.child(
                     div().flex_1().child(self.render_terminal_grid(window, cx)),

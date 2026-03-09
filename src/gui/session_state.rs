@@ -45,14 +45,35 @@ const NOTIFY_KEYWORDS: &[&str] = &[
 fn strip_ansi(buf: &[u8]) -> String {
     let s = String::from_utf8_lossy(buf);
     let mut out = String::with_capacity(s.len());
-    let mut in_escape = false;
-    for ch in s.chars() {
-        if in_escape {
-            if ch.is_ascii_alphabetic() || ch == '~' {
-                in_escape = false;
+    let mut chars = s.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            match chars.peek() {
+                Some(']') => {
+                    // OSC sequence: skip until BEL or ST (\x1b\\)
+                    chars.next();
+                    while let Some(c) = chars.next() {
+                        if c == '\x07' {
+                            break;
+                        }
+                        if c == '\x1b' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    // CSI / other: skip until alphabetic or ~
+                    while let Some(c) = chars.next() {
+                        if c.is_ascii_alphabetic() || c == '~' {
+                            break;
+                        }
+                    }
+                }
             }
-        } else if ch == '\x1b' {
-            in_escape = true;
+        } else if ch == '\x07' || ch == '\x08' {
+            // Skip BEL and backspace
         } else {
             out.push(ch);
         }
@@ -74,6 +95,9 @@ fn spawn_output_scanner(
     std::thread::spawn(move || {
         let mut writer = sock_write;
         let mut buf = [0u8; 4096];
+        let mut tail = String::new();
+        let mut last_notified = std::time::Instant::now() - std::time::Duration::from_secs(60);
+
         loop {
             let n = match pty_reader.read(&mut buf) {
                 Ok(0) => break,
@@ -86,11 +110,28 @@ fn spawn_output_scanner(
             }
 
             let text = strip_ansi(&buf[..n]);
+            // Prepend tail from previous chunk to catch keywords split across reads
+            let scan = format!("{tail}{text}");
+
+            // Keep last 256 chars for next iteration (char-safe slicing)
+            let char_count = scan.chars().count();
+            if char_count > 256 {
+                tail = scan.chars().skip(char_count - 256).collect();
+            } else {
+                tail = scan.clone();
+            }
+
+            // Debounce: at most one notification per 30 seconds
+            if last_notified.elapsed() < std::time::Duration::from_secs(30) {
+                continue;
+            }
+
             for keyword in NOTIFY_KEYWORDS {
-                if text.contains(keyword) {
+                if scan.contains(keyword) {
+                    last_notified = std::time::Instant::now();
                     let _ = notify_rust::Notification::new()
                         .summary(&format!("claudio: {}", session_name))
-                        .body(&format!("Session needs attention: {}", keyword))
+                        .body(&format!("{} needs your help", session_name))
                         .timeout(5000)
                         .show();
                     break;

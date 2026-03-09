@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use super::protocol::SessionInfo;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum DaemonEvent {
@@ -19,6 +23,10 @@ pub enum DaemonEvent {
     Transcription {
         session_id: String,
         text: String,
+        /// When true, append carriage return to submit the text.
+        /// When false, just insert the text without submitting.
+        #[serde(default = "default_true")]
+        enter: bool,
     },
     ResponseChunk {
         session_id: String,

@@ -152,6 +152,8 @@ impl ClaudioApp {
                 .into_any_element()
         } else {
             div()
+                .max_w(px(150.0))
+                .overflow_x_hidden()
                 .child(session.name.clone())
                 .into_any_element()
         };

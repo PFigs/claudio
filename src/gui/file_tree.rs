@@ -95,13 +95,11 @@ impl ClaudioApp {
     pub fn render_file_tree(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let mut container = div()
             .id("file-tree")
-            .w(px(250.0))
+            .w(px(self.file_tree_width))
             .h_full()
             .flex()
             .flex_col()
             .bg(rgb(theme::MANTLE))
-            .border_r_1()
-            .border_color(rgb(theme::SURFACE0))
             .overflow_y_scroll()
             .child(
                 div()
@@ -178,6 +176,8 @@ impl ClaudioApp {
                 div()
                     .id(label_id)
                     .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_x_hidden()
                     .cursor_pointer()
                     .child(label)
                     .text_color(rgb(theme::TEXT))
@@ -338,6 +338,8 @@ impl ClaudioApp {
             .child(
                 div()
                     .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_x_hidden()
                     .child(label)
                     .text_color(rgb(theme::TEXT))
                     .text_size(px(13.0)),
@@ -427,6 +429,8 @@ impl ClaudioApp {
             .child(
                 div()
                     .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_x_hidden()
                     .child(format!("  {name}"))
                     .text_color(rgb(theme::OVERLAY0))
                     .text_size(px(12.0)),
