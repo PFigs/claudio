@@ -216,6 +216,13 @@ pub struct AppState {
 #[serde(default)]
 pub struct GuiState {
     pub folder_roots: Vec<PathBuf>,
+    pub sessions: Vec<PersistedSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedSession {
+    pub name: String,
+    pub cwd: Option<PathBuf>,
 }
 
 impl AppState {
