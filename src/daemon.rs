@@ -135,8 +135,6 @@ async fn run_with_ml(
         let mut speech_buffer: Vec<i16> = Vec::new();
         let mut was_pressed = false;
         let mut was_speaking = false;
-        let mut had_mid_flush = false;
-
         loop {
             let chunk = match audio_rx.recv().await {
                 Some(c) => c,
@@ -160,7 +158,6 @@ async fn run_with_ml(
                             warn!("Utterance handling error: {e}");
                         }
                     }
-                    had_mid_flush = false;
                 }
                 was_pressed = false;
                 continue;
@@ -169,7 +166,6 @@ async fn run_with_ml(
             if !was_pressed {
                 // PTT just pressed -- start fresh
                 was_speaking = false;
-                had_mid_flush = false;
             }
             was_pressed = true;
 
@@ -189,8 +185,6 @@ async fn run_with_ml(
                     if status == VAD_SPEECH_END && !speech_buffer.is_empty() {
                         was_speaking = false;
                         let _ = pipeline_event_tx.send(DaemonEvent::VadState { speaking: false });
-                        // Mid-speech flush: import text without entering
-                        had_mid_flush = true;
                         let audio = std::mem::take(&mut speech_buffer);
                         drop(ml);
                         if let Err(e) = handle_utterance(
@@ -238,7 +232,12 @@ async fn handle_utterance(
 ) -> Result<()> {
     let pcm_bytes = samples_to_bytes(audio);
     let text = ml.lock().await.transcribe(&pcm_bytes).await?;
-    let text = text.trim().to_string();
+    let text = text.trim();
+    let text = if text.ends_with('.') {
+        text.to_string()
+    } else {
+        format!("{text} ")
+    };
 
     if text.is_empty() {
         info!("STT returned empty text, skipping");

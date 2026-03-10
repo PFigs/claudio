@@ -8,7 +8,6 @@ use super::session::Session;
 pub struct SessionManager {
     sessions: HashMap<String, Session>,
     focused_id: Option<String>,
-    next_index: usize,
 }
 
 impl SessionManager {
@@ -16,16 +15,20 @@ impl SessionManager {
         Self {
             sessions: HashMap::new(),
             focused_id: None,
-            next_index: 0,
         }
     }
 
     pub fn create_session(&mut self, name: Option<String>, mode: SessionMode) -> &Session {
         let id = uuid::Uuid::new_v4().to_string()[..8].to_string();
         let name = name.unwrap_or_else(|| {
-            let n = format!("session-{}", self.next_index);
-            self.next_index += 1;
-            n
+            let mut idx = 0;
+            loop {
+                let candidate = format!("session-{idx}");
+                if !self.sessions.values().any(|s| s.name == candidate) {
+                    break candidate;
+                }
+                idx += 1;
+            }
         });
 
         let session = Session::new(id.clone(), name, mode);
