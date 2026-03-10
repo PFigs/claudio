@@ -10,6 +10,8 @@ actions!(
         MinimizeSession,
         ToggleFileTree,
         AddFolder,
+        ReadAloud,
+        StopSpeech,
         Quit,
         StopDaemon,
     ]
@@ -23,6 +25,8 @@ pub fn register(cx: &mut App) {
         KeyBinding::new("ctrl-m", ToggleMode, Some("ClaudioApp")),
         KeyBinding::new("ctrl-shift-m", MinimizeSession, Some("ClaudioApp")),
         KeyBinding::new("ctrl-b", ToggleFileTree, Some("ClaudioApp")),
+        KeyBinding::new("ctrl-r", ReadAloud, Some("ClaudioApp")),
+        KeyBinding::new("ctrl-shift-r", StopSpeech, Some("ClaudioApp")),
         KeyBinding::new("ctrl-q", Quit, Some("ClaudioApp")),
         KeyBinding::new("ctrl-shift-q", StopDaemon, Some("ClaudioApp")),
     ]);

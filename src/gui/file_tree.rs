@@ -29,6 +29,7 @@ pub struct FileTree {
     pub roots: Vec<PathBuf>,
     pub expanded: HashSet<PathBuf>,
     pub visible: bool,
+    pub menu_open: Option<PathBuf>,
 }
 
 impl FileTree {
@@ -37,6 +38,7 @@ impl FileTree {
             roots: Vec::new(),
             expanded: HashSet::new(),
             visible: true,
+            menu_open: None,
         }
     }
 
@@ -151,17 +153,18 @@ impl ClaudioApp {
 
     fn render_root_node(&self, root: &PathBuf, cx: &mut Context<Self>) -> AnyElement {
         let is_expanded = self.file_tree.expanded.contains(root);
+        let menu_open = self.file_tree.menu_open.as_ref() == Some(root);
         let name = root
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| root.to_string_lossy().to_string());
 
-        let arrow = if is_expanded { "v " } else { "> " };
+        let arrow = if is_expanded { "\u{25be} " } else { "\u{25b8} " };
         let label = format!("{arrow}{name}");
 
         let path_toggle = root.clone();
         let path_open = root.clone();
-        let path_remove = root.clone();
+        let path_menu = root.clone();
 
         let label_id: SharedString = format!("label-{}", name).into();
         let mut node = div()
@@ -195,94 +198,133 @@ impl ClaudioApp {
                     ),
             );
 
-        // New session button
-        let path_plus = root.clone();
-        let btn_new_id: SharedString = format!("btn-new-{}", name).into();
+        // Hamburger menu toggle
+        let hamburger_id: SharedString = format!("hamburger-{}", name).into();
         node = node.child(
             div()
-                .id(btn_new_id)
-                .child(">_")
-                .text_color(rgb(theme::OVERLAY0))
-                .text_size(px(12.0))
+                .id(hamburger_id)
+                .child("\u{2261}") // hamburger icon
+                .text_size(px(14.0))
+                .text_color(if menu_open { rgb(theme::TEXT) } else { rgb(theme::OVERLAY0) })
                 .px(px(4.0))
                 .cursor_pointer()
-                .hover(|s| s.text_color(rgb(theme::GREEN)))
-                .tooltip(build_tooltip("New session in this folder"))
+                .hover(|s| s.text_color(rgb(theme::TEAL)))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |app, _ev: &MouseDownEvent, _window, cx| {
-                        app.new_session_in_dir(path_plus.clone(), cx);
-                    }),
-                ),
-        );
-
-        // Git worktree session button (only if this is a git repo)
-        if root.join(".git").exists() {
-            let path_wt = root.clone();
-            let btn_wt_id: SharedString = format!("btn-wt-{}", name).into();
-            node = node.child(
-                div()
-                    .id(btn_wt_id)
-                    .child("\u{2387}") // ⎇ branch symbol
-                    .text_color(rgb(theme::OVERLAY0))
-                    .text_size(px(14.0))
-                    .px(px(4.0))
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(theme::TEAL)))
-                    .tooltip(build_tooltip("New worktree session"))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |app, _ev: &MouseDownEvent, _window, cx| {
-                            app.new_worktree_session_in_dir(path_wt.clone(), cx);
-                        }),
-                    ),
-            );
-        }
-
-        // Open in editor button
-        let path_editor = root.clone();
-        let btn_ed_id: SharedString = format!("btn-ed-{}", name).into();
-        node = node.child(
-            div()
-                .id(btn_ed_id)
-                .child("\u{270e}") // pencil symbol
-                .text_size(px(13.0))
-                .text_color(rgb(theme::OVERLAY0))
-                .px(px(4.0))
-                .cursor_pointer()
-                .hover(|s| s.text_color(rgb(theme::BLUE)))
-                .tooltip(build_tooltip("Open in editor"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |app, _ev: &MouseDownEvent, _window, _cx| {
-                        app.open_in_editor(&path_editor);
-                    }),
-                ),
-        );
-
-        // Remove folder button
-        let btn_rm_id: SharedString = format!("btn-rm-{}", name).into();
-        node = node.child(
-            div()
-                .id(btn_rm_id)
-                .child("\u{00d7}") // multiplication sign as close icon
-                .text_size(px(13.0))
-                .text_color(rgb(theme::OVERLAY0))
-                .px(px(4.0))
-                .cursor_pointer()
-                .hover(|s| s.text_color(rgb(theme::RED)))
-                .tooltip(build_tooltip("Remove folder"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |app, _ev: &MouseDownEvent, _window, cx| {
-                        app.file_tree.remove_root(&path_remove);
-                        app.save_folder_state();
+                        if app.file_tree.menu_open.as_ref() == Some(&path_menu) {
+                            app.file_tree.menu_open = None;
+                        } else {
+                            app.file_tree.menu_open = Some(path_menu.clone());
+                        }
                         cx.notify();
                     }),
                 ),
         );
 
         let mut wrapper = div().flex().flex_col().child(node);
+
+        // Action buttons row (shown when hamburger menu is open)
+        if menu_open {
+            let path_plus = root.clone();
+            let path_editor = root.clone();
+            let path_remove = root.clone();
+
+            let btn_new_id: SharedString = format!("btn-new-{}", name).into();
+            let btn_ed_id: SharedString = format!("btn-ed-{}", name).into();
+            let btn_rm_id: SharedString = format!("btn-rm-{}", name).into();
+
+            let mut actions = div()
+                .px(px(20.0))
+                .py(px(2.0))
+                .flex()
+                .flex_row()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .id(btn_new_id)
+                        .child(">_ new")
+                        .text_color(rgb(theme::OVERLAY0))
+                        .text_size(px(12.0))
+                        .px(px(4.0))
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(rgb(theme::GREEN)))
+                        .tooltip(build_tooltip("New session in this folder"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |app, _ev: &MouseDownEvent, _window, cx| {
+                                app.new_session_in_dir(path_plus.clone(), cx);
+                                app.file_tree.menu_open = None;
+                            }),
+                        ),
+                );
+
+            // Git worktree session button (only if this is a git repo)
+            if root.join(".git").exists() {
+                let path_wt = root.clone();
+                let btn_wt_id: SharedString = format!("btn-wt-{}", name).into();
+                actions = actions.child(
+                    div()
+                        .id(btn_wt_id)
+                        .child("\u{2387} worktree")
+                        .text_color(rgb(theme::OVERLAY0))
+                        .text_size(px(12.0))
+                        .px(px(4.0))
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(rgb(theme::TEAL)))
+                        .tooltip(build_tooltip("New worktree session"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |app, _ev: &MouseDownEvent, _window, cx| {
+                                app.start_worktree_naming(path_wt.clone(), cx);
+                                app.file_tree.menu_open = None;
+                            }),
+                        ),
+                );
+            }
+
+            actions = actions
+                .child(
+                    div()
+                        .id(btn_ed_id)
+                        .child("\u{270e} edit")
+                        .text_size(px(12.0))
+                        .text_color(rgb(theme::OVERLAY0))
+                        .px(px(4.0))
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(rgb(theme::BLUE)))
+                        .tooltip(build_tooltip("Open in editor"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |app, _ev: &MouseDownEvent, _window, _cx| {
+                                app.open_in_editor(&path_editor);
+                                app.file_tree.menu_open = None;
+                            }),
+                        ),
+                )
+                .child(
+                    div()
+                        .id(btn_rm_id)
+                        .child("\u{00d7} remove")
+                        .text_size(px(12.0))
+                        .text_color(rgb(theme::OVERLAY0))
+                        .px(px(4.0))
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(rgb(theme::RED)))
+                        .tooltip(build_tooltip("Remove folder"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |app, _ev: &MouseDownEvent, _window, cx| {
+                                app.file_tree.remove_root(&path_remove);
+                                app.file_tree.menu_open = None;
+                                app.save_state();
+                                cx.notify();
+                            }),
+                        ),
+                );
+
+            wrapper = wrapper.child(actions);
+        }
 
         if is_expanded {
             let (dirs, files) = FileTree::list_children(root);
@@ -309,13 +351,13 @@ impl ClaudioApp {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string_lossy().to_string());
 
-        let arrow = if is_expanded { "v " } else { "> " };
+        let arrow = if is_expanded { "\u{25be} " } else { "\u{25b8} " };
         let label = format!("{arrow}{name}");
 
         let path_toggle = path.clone();
         let path_open = path.clone();
 
-        let mut node = div()
+        let node = div()
             .px(px(8.0 + depth as f32 * 16.0))
             .py(px(2.0))
             .w_full()
@@ -345,50 +387,6 @@ impl ClaudioApp {
                     .text_size(px(13.0)),
             );
 
-        // New session button
-        let path_plus = path.clone();
-        let btn_new_id: SharedString = format!("btn-new-{}-{}", depth, name).into();
-        node = node.child(
-            div()
-                .id(btn_new_id)
-                .child(">_")
-                .text_color(rgb(theme::OVERLAY0))
-                .text_size(px(12.0))
-                .px(px(4.0))
-                .cursor_pointer()
-                .hover(|s| s.text_color(rgb(theme::GREEN)))
-                .tooltip(build_tooltip("New session in this folder"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |app, _ev: &MouseDownEvent, _window, cx| {
-                        app.new_session_in_dir(path_plus.clone(), cx);
-                    }),
-                ),
-        );
-
-        // Git worktree session button (only if this is a git repo)
-        if path.join(".git").exists() {
-            let path_wt = path.clone();
-            let btn_wt_id: SharedString = format!("btn-wt-{}-{}", depth, name).into();
-            node = node.child(
-                div()
-                    .id(btn_wt_id)
-                    .child("\u{2387}") // ⎇ branch symbol
-                    .text_color(rgb(theme::OVERLAY0))
-                    .text_size(px(14.0))
-                    .px(px(4.0))
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(theme::TEAL)))
-                    .tooltip(build_tooltip("New worktree session"))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |app, _ev: &MouseDownEvent, _window, cx| {
-                            app.new_worktree_session_in_dir(path_wt.clone(), cx);
-                        }),
-                    ),
-            );
-        }
-
         let mut wrapper = div().flex().flex_col().child(node);
 
         if is_expanded {
@@ -416,7 +414,6 @@ impl ClaudioApp {
             .unwrap_or_else(|| path.to_string_lossy().to_string());
 
         let path_inject = path.clone();
-        let btn_id: SharedString = format!("btn-inject-{}-{}", depth, name).into();
 
         div()
             .px(px(8.0 + depth as f32 * 16.0))
@@ -425,7 +422,15 @@ impl ClaudioApp {
             .flex()
             .flex_row()
             .items_center()
+            .cursor_pointer()
             .hover(|s| s.bg(rgb(theme::SURFACE0)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |app, _ev: &MouseDownEvent, _window, _cx| {
+                    let text = format!("@{} ", path_inject.to_string_lossy());
+                    app.inject_text_to_focused(&text);
+                }),
+            )
             .child(
                 div()
                     .flex_1()
@@ -434,24 +439,6 @@ impl ClaudioApp {
                     .child(format!("  {name}"))
                     .text_color(rgb(theme::OVERLAY0))
                     .text_size(px(12.0)),
-            )
-            .child(
-                div()
-                    .id(btn_id)
-                    .child("->")
-                    .text_color(rgb(theme::OVERLAY0))
-                    .text_size(px(11.0))
-                    .px(px(4.0))
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(theme::BLUE)))
-                    .tooltip(build_tooltip("Insert @path into active session"))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |app, _ev: &MouseDownEvent, _window, _cx| {
-                            let text = format!("@{} ", path_inject.to_string_lossy());
-                            app.inject_text_to_focused(&text);
-                        }),
-                    ),
             )
             .into_any_element()
     }

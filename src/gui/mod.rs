@@ -29,7 +29,7 @@ pub fn run(socket_path: &Path) -> Result<()> {
                     ..Default::default()
                 }),
                 window_min_size: Some(gpui::size(gpui::px(800.0), gpui::px(600.0))),
-                window_decorations: Some(gpui::WindowDecorations::Server),
+                window_decorations: Some(gpui::WindowDecorations::Client),
                 ..Default::default()
             },
             |window, cx| cx.new(|cx| ClaudioApp::new(&socket, window, cx)),

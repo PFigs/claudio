@@ -28,6 +28,31 @@ impl ClaudioApp {
             bar = bar.child(self.render_pill(session, cx));
         }
 
+        // Worktree naming input
+        if self.pending_worktree_repo.is_some() {
+            let input_text = format!("worktree: {}|", &self.worktree_name_input);
+            bar = bar.child(
+                div()
+                    .px(px(8.0))
+                    .py(px(2.0))
+                    .rounded(px(8.0))
+                    .bg(rgb(theme::SURFACE1))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(4.0))
+                            .text_size(px(12.0))
+                            .child(
+                                div()
+                                    .child(input_text)
+                                    .text_color(rgb(theme::TEAL)),
+                            ),
+                    ),
+            );
+        }
+
         // Spacer / drag handle
         bar = bar.child(
             div()
@@ -86,15 +111,7 @@ impl ClaudioApp {
                 .cursor_pointer()
                 .hover(|s| s.text_color(rgb(theme::TEAL)))
                 .on_mouse_down(MouseButton::Left, cx.listener(|_app, _ev, _window, _cx| {
-                    match notify_rust::Notification::new()
-                        .summary("claudio / test-session")
-                        .body("test-session needs your attention")
-                        .timeout(5000)
-                        .show()
-                    {
-                        Ok(_) => eprintln!("Test notification sent"),
-                        Err(e) => eprintln!("Notification error: {}", e),
-                    }
+                    super::session_state::send_desktop_notification("test-session");
                 })),
         );
 

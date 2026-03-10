@@ -4,15 +4,43 @@ use super::app::ClaudioApp;
 use super::session_state::SessionState;
 use super::theme;
 
+pub enum ResizeAxis {
+    Column(usize),
+    Row(usize),
+}
+
+pub struct GridResize {
+    pub axis: ResizeAxis,
+    pub start_position: f32,
+    pub start_ratios: (f32, f32),
+}
+
+fn div_with_flex_grow(ratio: f32) -> Div {
+    let mut d = div();
+    d.style().flex_grow = Some(ratio);
+    d.style().flex_shrink = Some(1.);
+    d.style().flex_basis = Some(relative(0.).into());
+    d.overflow_hidden()
+}
+
 impl ClaudioApp {
+    pub fn ensure_grid_ratios(&mut self, rows: usize, cols: usize) {
+        if self.grid_col_ratios.len() != cols {
+            self.grid_col_ratios = vec![1.0; cols];
+        }
+        if self.grid_row_ratios.len() != rows {
+            self.grid_row_ratios = vec![1.0; rows];
+        }
+    }
+
     pub fn render_terminal_grid(
-        &self,
+        &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let visible: Vec<&SessionState> = self.sessions.iter().filter(|s| !s.minimized).collect();
+        let n = self.sessions.iter().filter(|s| !s.minimized).count();
 
-        if visible.is_empty() {
+        if n == 0 {
             return div()
                 .size_full()
                 .flex()
@@ -28,27 +56,110 @@ impl ClaudioApp {
                 .into_any_element();
         }
 
-        let n = visible.len();
         let cols = grid_cols(n);
         let rows = grid_rows(n);
 
-        let mut grid = div().size_full().flex().flex_col().bg(rgb(theme::CRUST)).gap(px(2.0));
+        self.ensure_grid_ratios(rows, cols);
+
+        let visible: Vec<&SessionState> = self.sessions.iter().filter(|s| !s.minimized).collect();
+
+        let mut grid = div().size_full().flex().flex_col().bg(rgb(theme::CRUST));
 
         for row_idx in 0..rows {
-            let mut row = div().flex_1().flex().flex_row().gap(px(2.0));
+            if row_idx > 0 {
+                grid = grid.child(self.render_row_divider(row_idx - 1, cx));
+            }
+
+            let mut row = div_with_flex_grow(self.grid_row_ratios[row_idx])
+                .flex()
+                .flex_row();
+
             for col_idx in 0..cols {
+                if col_idx > 0 {
+                    row = row.child(self.render_col_divider(col_idx - 1, cx));
+                }
+
                 let idx = row_idx * cols + col_idx;
                 if idx < n {
                     let session = visible[idx];
-                    row = row.child(self.render_pane(session, cx));
+                    row = row.child(
+                        div_with_flex_grow(self.grid_col_ratios[col_idx])
+                            .child(self.render_pane(session, cx)),
+                    );
                 } else {
-                    row = row.child(div().flex_1().bg(rgb(theme::CRUST)));
+                    row = row.child(
+                        div_with_flex_grow(self.grid_col_ratios[col_idx]),
+                    );
                 }
             }
             grid = grid.child(row);
         }
 
         grid.into_any_element()
+    }
+
+    fn render_col_divider(&self, idx: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_active = matches!(&self.grid_resize, Some(r) if matches!(r.axis, ResizeAxis::Column(i) if i == idx));
+        let bg = if is_active { theme::BLUE } else { theme::CRUST };
+
+        let divider_idx = idx;
+        div()
+            .w(px(4.0))
+            .h_full()
+            .flex_shrink_0()
+            .cursor_col_resize()
+            .bg(rgb(bg))
+            .hover(|s| s.bg(rgb(theme::BLUE)))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |app, ev: &MouseDownEvent, _window, cx| {
+                if app.grid_col_ratios.len() > divider_idx + 1 {
+                    if ev.click_count == 2 {
+                        app.grid_col_ratios[divider_idx] = 1.0;
+                        app.grid_col_ratios[divider_idx + 1] = 1.0;
+                        cx.notify();
+                    } else {
+                        app.grid_resize = Some(GridResize {
+                            axis: ResizeAxis::Column(divider_idx),
+                            start_position: ev.position.x.into(),
+                            start_ratios: (
+                                app.grid_col_ratios[divider_idx],
+                                app.grid_col_ratios[divider_idx + 1],
+                            ),
+                        });
+                    }
+                }
+            }))
+    }
+
+    fn render_row_divider(&self, idx: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_active = matches!(&self.grid_resize, Some(r) if matches!(r.axis, ResizeAxis::Row(i) if i == idx));
+        let bg = if is_active { theme::BLUE } else { theme::CRUST };
+
+        let divider_idx = idx;
+        div()
+            .h(px(4.0))
+            .w_full()
+            .flex_shrink_0()
+            .cursor_ns_resize()
+            .bg(rgb(bg))
+            .hover(|s| s.bg(rgb(theme::BLUE)))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |app, ev: &MouseDownEvent, _window, cx| {
+                if app.grid_row_ratios.len() > divider_idx + 1 {
+                    if ev.click_count == 2 {
+                        app.grid_row_ratios[divider_idx] = 1.0;
+                        app.grid_row_ratios[divider_idx + 1] = 1.0;
+                        cx.notify();
+                    } else {
+                        app.grid_resize = Some(GridResize {
+                            axis: ResizeAxis::Row(divider_idx),
+                            start_position: ev.position.y.into(),
+                            start_ratios: (
+                                app.grid_row_ratios[divider_idx],
+                                app.grid_row_ratios[divider_idx + 1],
+                            ),
+                        });
+                    }
+                }
+            }))
     }
 
     fn render_pane(&self, session: &SessionState, cx: &mut Context<Self>) -> impl IntoElement {
@@ -70,7 +181,7 @@ impl ClaudioApp {
         let terminal_view = session.terminal_view.clone();
 
         div()
-            .flex_1()
+            .size_full()
             .flex()
             .flex_col()
             .border_1()

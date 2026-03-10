@@ -5,11 +5,12 @@ use gpui;
 use gpui::AppContext;
 use gpui_terminal::{ColorPalette, TerminalConfig, TerminalView};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 use std::path::PathBuf;
 
-use crate::ipc::protocol::SessionInfo;
+use crate::ipc::protocol::{Request, SessionInfo};
+use crate::gui::ipc_bridge;
 
 /// A cloneable Write handle backed by a shared writer.
 struct SharedWriter {
@@ -27,65 +28,63 @@ impl Write for SharedWriter {
 }
 
 /// Keywords in terminal output that trigger a "needs help" notification.
+/// Matched case-insensitively against ANSI-stripped PTY output.
 const NOTIFY_KEYWORDS: &[&str] = &[
-    "Do you want to proceed?",
-    "approve",
-    "permission",
-    "Allow",
-    "Deny",
+    "do you want to proceed",
+    "do you want to allow",
+    "requires approval",
+    "allow once",
+    "always allow",
+    "allow all",
+    "allow read",
+    "allow write",
+    "allow bash",
+    "allow edit",
+    "allow mcp",
     "(y/n)",
-    "(Y/n)",
-    "[Y/n]",
-    "[y/N]",
-    "Press Enter",
-    "waiting for",
+    "[y/n]",
 ];
 
-/// Strip ANSI escape sequences from a byte buffer for keyword scanning.
+/// Strip ANSI escape sequences and control characters from a byte buffer for keyword scanning.
 fn strip_ansi(buf: &[u8]) -> String {
-    let s = String::from_utf8_lossy(buf);
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
+    let stripped = strip_ansi_escapes::strip(buf);
+    String::from_utf8_lossy(&stripped)
+        .chars()
+        .filter(|c| !c.is_ascii_control() || *c == ' ' || *c == '\n')
+        .collect()
+}
 
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' {
-            match chars.peek() {
-                Some(']') => {
-                    // OSC sequence: skip until BEL or ST (\x1b\\)
-                    chars.next();
-                    while let Some(c) = chars.next() {
-                        if c == '\x07' {
-                            break;
-                        }
-                        if c == '\x1b' && chars.peek() == Some(&'\\') {
-                            chars.next();
-                            break;
-                        }
-                    }
-                }
-                _ => {
-                    // CSI / other: skip until alphabetic or ~
-                    while let Some(c) = chars.next() {
-                        if c.is_ascii_alphabetic() || c == '~' {
-                            break;
-                        }
-                    }
-                }
-            }
-        } else if ch == '\x07' || ch == '\x08' {
-            // Skip BEL and backspace
-        } else {
-            out.push(ch);
+/// Send a desktop notification via notify-send.
+pub fn send_desktop_notification(session_name: &str) {
+    let summary = format!("claudio: {}", session_name);
+    let body = format!("{} is requesting your help", session_name);
+
+    let mut cmd = std::process::Command::new("notify-send");
+    cmd.arg("--urgency=normal")
+        .arg("-t")
+        .arg("10000");
+
+    // Use the bundled icon if we can find it next to the executable
+    if let Ok(exe) = std::env::current_exe() {
+        let icon = exe.parent().unwrap_or(exe.as_ref()).join("../assets/icon-128.png");
+        if let Ok(icon) = icon.canonicalize() {
+            cmd.arg("--icon").arg(icon);
         }
     }
-    out
+
+    cmd.arg(&summary).arg(&body);
+
+    match cmd.spawn() {
+        Ok(_) => info!("[notify] notification sent for '{}'", session_name),
+        Err(e) => warn!("[notify] notify-send failed: {}", e),
+    }
 }
 
 /// Spawn a proxy thread that reads PTY output, forwards it to a pipe for
 /// TerminalView, and scans for keywords to trigger desktop notifications.
 fn spawn_output_scanner(
     mut pty_reader: Box<dyn Read + Send>,
-    session_name: String,
+    session_name: Arc<Mutex<String>>,
 ) -> Box<dyn Read + Send> {
     let (sock_read, sock_write) = std::os::unix::net::UnixStream::pair()
         .expect("Failed to create socket pair");
@@ -121,19 +120,20 @@ fn spawn_output_scanner(
                 tail = scan.clone();
             }
 
-            // Debounce: at most one notification per 30 seconds
-            if last_notified.elapsed() < std::time::Duration::from_secs(30) {
-                continue;
-            }
+            let scan_lower = scan.to_lowercase();
+            trace!("[notify] stripped chunk: {:?}", &scan_lower);
 
             for keyword in NOTIFY_KEYWORDS {
-                if scan.contains(keyword) {
+                if scan_lower.contains(keyword) {
+                    let name = session_name.lock().unwrap().clone();
+                    // Debounce: at most one notification per 10 seconds
+                    if last_notified.elapsed() < std::time::Duration::from_secs(10) {
+                        debug!("[notify] keyword {:?} matched but debounced in session '{}'", keyword, name);
+                        break;
+                    }
                     last_notified = std::time::Instant::now();
-                    let _ = notify_rust::Notification::new()
-                        .summary(&format!("claudio: {}", session_name))
-                        .body(&format!("{} needs your help", session_name))
-                        .timeout(5000)
-                        .show();
+                    info!("[notify] keyword {:?} matched in session '{}'", keyword, name);
+                    send_desktop_notification(&name);
                     break;
                 }
             }
@@ -150,14 +150,17 @@ pub struct SessionState {
     pub focused: bool,
     pub busy: bool,
     pub minimized: bool,
+    pub cwd: Option<PathBuf>,
     pub terminal_view: gpui::Entity<TerminalView>,
     voice_writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    notify_name: Arc<Mutex<String>>,
 }
 
 impl SessionState {
     pub fn new_with_cwd(
         info: SessionInfo,
         cwd: Option<PathBuf>,
+        socket_path: PathBuf,
         cx: &mut gpui::Context<super::app::ClaudioApp>,
     ) -> Self {
         let pty_system = native_pty_system();
@@ -170,10 +173,12 @@ impl SessionState {
             })
             .expect("Failed to create PTY");
 
-        let mut cmd = CommandBuilder::new("claude");
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let mut cmd = CommandBuilder::new(&shell);
+        cmd.args(["-c", &format!("claude; exec {}", shell)]);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
-        if let Some(dir) = cwd {
+        if let Some(ref dir) = cwd {
             cmd.cwd(dir);
         }
 
@@ -184,7 +189,8 @@ impl SessionState {
         drop(pair.slave);
 
         let pty_reader = pair.master.try_clone_reader().expect("Failed to clone PTY reader");
-        let reader = spawn_output_scanner(pty_reader, info.name.clone());
+        let notify_name = Arc::new(Mutex::new(info.name.clone()));
+        let reader = spawn_output_scanner(pty_reader, Arc::clone(&notify_name));
 
         // take_writer() can only be called once; share via Arc<Mutex<>>
         let writer = pair.master.take_writer().expect("Failed to take PTY writer");
@@ -206,9 +212,10 @@ impl SessionState {
 
         let master = Arc::new(Mutex::new(pair.master));
         let master_resize = Arc::clone(&master);
+        let exit_session_id = info.id.clone();
         let terminal_view = cx.new(|cx| {
-            TerminalView::new(kb_writer, reader, config, cx).with_resize_callback(
-                move |cols: usize, rows: usize| {
+            TerminalView::new(kb_writer, reader, config, cx)
+                .with_resize_callback(move |cols: usize, rows: usize| {
                     if let Ok(m) = master_resize.lock() {
                         let _ = m.resize(PtySize {
                             rows: rows as u16,
@@ -217,8 +224,17 @@ impl SessionState {
                             pixel_height: 0,
                         });
                     }
-                },
-            )
+                })
+                .with_exit_callback(move |_window, _cx| {
+                    let socket = socket_path.clone();
+                    let session_id = exit_session_id.clone();
+                    std::thread::spawn(move || {
+                        let _ = ipc_bridge::send_command(
+                            &socket,
+                            &Request::Kill { session: session_id },
+                        );
+                    });
+                })
         });
 
         info!("Created terminal for session '{}'", info.name);
@@ -230,20 +246,17 @@ impl SessionState {
             focused: info.focused,
             busy: info.busy,
             minimized: false,
+            cwd,
             terminal_view,
             voice_writer: shared_writer,
+            notify_name,
         }
     }
 
-    /// Write voice transcription to the PTY.
-    pub fn write_transcription(&self, text: &str) {
-        if let Ok(mut w) = self.voice_writer.lock() {
-            let input = format!("{text}\r");
-            if let Err(e) = w.write_all(input.as_bytes()) {
-                warn!("Failed to write transcription to PTY: {e}");
-            }
-            let _ = w.flush();
-        }
+    /// Update the session name, keeping the notification thread in sync.
+    pub fn set_name(&mut self, name: String) {
+        self.name = name.clone();
+        *self.notify_name.lock().unwrap() = name;
     }
 
     /// Write raw text to the PTY without appending a carriage return.

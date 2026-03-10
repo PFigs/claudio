@@ -8,6 +8,7 @@ use super::actions::*;
 use super::file_tree::FileTree;
 use super::ipc_bridge;
 use super::session_state::SessionState;
+use super::terminal_grid::GridResize;
 use crate::config::AppState;
 use crate::ipc::events::DaemonEvent;
 use crate::ipc::protocol::Request;
@@ -26,8 +27,13 @@ pub struct ClaudioApp {
     pending_session_cwds: VecDeque<PathBuf>,
     pub renaming_session_id: Option<String>,
     pub rename_input: String,
+    pub pending_worktree_repo: Option<PathBuf>,
+    pub worktree_name_input: String,
     pub file_tree_width: f32,
     file_tree_resizing: bool,
+    pub grid_col_ratios: Vec<f32>,
+    pub grid_row_ratios: Vec<f32>,
+    pub grid_resize: Option<GridResize>,
 }
 
 impl ClaudioApp {
@@ -68,6 +74,31 @@ impl ClaudioApp {
             file_tree.add_root(root.clone());
         }
 
+        // Restore sessions from previous run
+        let mut pending_session_cwds = VecDeque::new();
+        let restore_socket = socket_path.to_path_buf();
+        let persisted_sessions = state.gui.sessions.clone();
+        if !persisted_sessions.is_empty() {
+            for ps in &persisted_sessions {
+                if let Some(ref cwd) = ps.cwd {
+                    pending_session_cwds.push_back(cwd.clone());
+                }
+            }
+            cx.background_executor()
+                .spawn(async move {
+                    for ps in persisted_sessions {
+                        let _ = ipc_bridge::send_command(
+                            &restore_socket,
+                            &Request::New {
+                                name: Some(ps.name),
+                                mode: SessionMode::Speaking,
+                            },
+                        );
+                    }
+                })
+                .detach();
+        }
+
         Self {
             sessions: Vec::new(),
             focused_session_id: None,
@@ -78,11 +109,16 @@ impl ClaudioApp {
             focus_handle,
             needs_focus_sync: false,
             file_tree,
-            pending_session_cwds: VecDeque::new(),
+            pending_session_cwds,
             renaming_session_id: None,
             rename_input: String::new(),
+            pending_worktree_repo: None,
+            worktree_name_input: String::new(),
             file_tree_width: 250.0,
             file_tree_resizing: false,
+            grid_col_ratios: Vec::new(),
+            grid_row_ratios: Vec::new(),
+            grid_resize: None,
         }
     }
 
@@ -122,8 +158,9 @@ impl ClaudioApp {
             DaemonEvent::SessionCreated { session } => {
                 if !self.sessions.iter().any(|s| s.id == session.id) {
                     let cwd = self.pending_session_cwds.pop_front();
-                    let state = SessionState::new_with_cwd(session, cwd, cx);
+                    let state = SessionState::new_with_cwd(session, cwd, self.socket_path.clone(), cx);
                     self.sessions.push(state);
+                    self.save_state();
                 }
                 self.needs_focus_sync = true;
                 cx.notify();
@@ -133,6 +170,7 @@ impl ClaudioApp {
                 if self.focused_session_id.as_deref() == Some(&session_id) {
                     self.focused_session_id = self.sessions.first().map(|s| s.id.clone());
                 }
+                self.save_state();
                 cx.notify();
             }
             DaemonEvent::SessionFocused { session_id } => {
@@ -145,7 +183,7 @@ impl ClaudioApp {
             }
             DaemonEvent::SessionRenamed { session_id, new_name } => {
                 if let Some(s) = self.sessions.iter_mut().find(|s| s.id == session_id) {
-                    s.name = new_name;
+                    s.set_name(new_name);
                 }
                 cx.notify();
             }
@@ -311,10 +349,103 @@ impl ClaudioApp {
         self.open_add_folder_dialog(cx);
     }
 
-    pub fn save_folder_state(&self) {
+    fn stop_speech(&mut self, _: &StopSpeech, _window: &mut Window, _cx: &mut Context<Self>) {
+        let _ = std::process::Command::new("pkill")
+            .arg("-f")
+            .arg("pw-play.*/tmp/claudio_tts")
+            .output();
+        let _ = std::process::Command::new("pkill")
+            .arg("-f")
+            .arg("piper.*claudio")
+            .output();
+    }
+
+    fn read_aloud(&mut self, _: &ReadAloud, _window: &mut Window, cx: &mut Context<Self>) {
+        let raw_text = if let Some(ref id) = self.focused_session_id {
+            self.sessions
+                .iter()
+                .find(|s| &s.id == id)
+                .map(|s| s.terminal_view.read(cx).screen_text())
+        } else {
+            None
+        };
+
+        if let Some(raw_text) = raw_text {
+            if !raw_text.trim().is_empty() {
+                // Kill any ongoing speech
+                let _ = std::process::Command::new("pkill").arg("-f").arg("pw-play.*/tmp/claudio_tts").output();
+
+                let config = crate::config::Config::load().ok();
+                let model_path = config
+                    .and_then(|c| c.tts.model)
+                    .unwrap_or_else(|| {
+                        dirs::data_dir()
+                            .unwrap_or_else(|| PathBuf::from("/home"))
+                            .join("piper/voices/en_US-lessac-medium.onnx")
+                            .to_string_lossy()
+                            .to_string()
+                    });
+
+                let piper_bin = crate::daemon::find_ml_service_dir()
+                    .map(|d| d.join(".venv/bin/piper"))
+                    .unwrap_or_else(|_| PathBuf::from("piper"));
+
+                std::thread::spawn(move || {
+                    use std::process::{Command, Stdio};
+                    let wav_path = "/tmp/claudio_tts.wav";
+
+                    let text = summarize_screen_for_tts(&raw_text)
+                        .unwrap_or_else(|| clean_for_tts(&raw_text));
+
+                    if text.trim().is_empty() {
+                        return;
+                    }
+
+                    let status = Command::new(&piper_bin)
+                        .arg("--model")
+                        .arg(&model_path)
+                        .arg("--output_file")
+                        .arg(wav_path)
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .and_then(|mut child| {
+                            if let Some(mut stdin) = child.stdin.take() {
+                                use std::io::Write;
+                                let _ = stdin.write_all(text.as_bytes());
+                                drop(stdin);
+                            }
+                            child.wait()
+                        });
+
+                    if status.is_ok_and(|s| s.success()) {
+                        let _ = Command::new("pw-play")
+                            .arg(wav_path)
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .status();
+                    } else {
+                        // Fallback to spd-say
+                        let _ = Command::new("spd-say").arg(&text).spawn();
+                    }
+                });
+            }
+        }
+    }
+
+    pub fn save_state(&self) {
         let state = AppState {
             gui: crate::config::GuiState {
                 folder_roots: self.file_tree.roots.clone(),
+                sessions: self
+                    .sessions
+                    .iter()
+                    .map(|s| crate::config::PersistedSession {
+                        name: s.name.clone(),
+                        cwd: s.cwd.clone(),
+                    })
+                    .collect(),
             },
         };
         state.save();
@@ -333,7 +464,7 @@ impl ClaudioApp {
                     for path in paths {
                         app.file_tree.add_root(path);
                     }
-                    app.save_folder_state();
+                    app.save_state();
                     cx.notify();
                 });
             }
@@ -377,7 +508,7 @@ impl ClaudioApp {
             if !new_name.is_empty() {
                 // Update local state immediately
                 if let Some(s) = self.sessions.iter_mut().find(|s| s.id == session_id) {
-                    s.name = new_name.clone();
+                    s.set_name(new_name.clone());
                 }
                 let socket = self.socket_path.clone();
                 cx.background_executor()
@@ -403,6 +534,26 @@ impl ClaudioApp {
     }
 
     fn handle_rename_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_worktree_repo.is_some() {
+            let key = ev.keystroke.key.as_str();
+            match key {
+                "enter" => self.commit_worktree_naming(cx),
+                "escape" => self.cancel_worktree_naming(cx),
+                "backspace" => {
+                    self.worktree_name_input.pop();
+                    cx.notify();
+                }
+                _ => {
+                    if let Some(ch) = &ev.keystroke.key_char {
+                        if !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
+                            self.worktree_name_input.push_str(ch);
+                            cx.notify();
+                        }
+                    }
+                }
+            }
+            return;
+        }
         if self.renaming_session_id.is_none() {
             return;
         }
@@ -441,73 +592,176 @@ impl ClaudioApp {
             .detach();
     }
 
-    pub fn new_worktree_session_in_dir(&mut self, repo_dir: PathBuf, cx: &mut Context<Self>) {
-        let session_name = worktree_session_name(
-            &repo_dir,
-            &self.sessions.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
-        );
+    pub fn start_worktree_naming(&mut self, repo_dir: PathBuf, cx: &mut Context<Self>) {
+        self.renaming_session_id = None;
+        self.rename_input.clear();
+        self.pending_worktree_repo = Some(repo_dir);
+        self.worktree_name_input.clear();
+        cx.notify();
+    }
+
+    pub fn commit_worktree_naming(&mut self, cx: &mut Context<Self>) {
+        if let Some(repo_dir) = self.pending_worktree_repo.take() {
+            let name = self.worktree_name_input.clone();
+            self.worktree_name_input.clear();
+            if !name.is_empty() {
+                self.new_worktree_session_in_dir(repo_dir, name, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    pub fn cancel_worktree_naming(&mut self, cx: &mut Context<Self>) {
+        self.pending_worktree_repo = None;
+        self.worktree_name_input.clear();
+        cx.notify();
+    }
+
+    pub fn new_worktree_session_in_dir(&mut self, repo_dir: PathBuf, session_name: String, cx: &mut Context<Self>) {
         let worktree_dir = repo_dir.join(".worktree").join(format!("claudio-{session_name}"));
         let branch_name = format!("claudio-{session_name}");
         let socket = self.socket_path.clone();
         let name = session_name.clone();
+        let wt_dir_for_cleanup = worktree_dir.clone();
 
         self.pending_session_cwds.push_back(worktree_dir.clone());
 
-        cx.background_executor()
-            .spawn(async move {
-                let result = std::process::Command::new("git")
-                    .args(["worktree", "add", "-b", &branch_name])
-                    .arg(&worktree_dir)
-                    .arg("HEAD")
-                    .current_dir(&repo_dir)
-                    .output();
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            let git_ok = cx.background_executor()
+                .spawn(async move {
+                    let result = std::process::Command::new("git")
+                        .args(["worktree", "add", "-b", &branch_name])
+                        .arg(&worktree_dir)
+                        .arg("HEAD")
+                        .current_dir(&repo_dir)
+                        .output();
 
-                let ok = match result {
-                    Ok(out) if out.status.success() => true,
-                    Ok(_) => {
-                        // Branch might already exist, retry without -b
-                        std::process::Command::new("git")
-                            .args(["worktree", "add"])
-                            .arg(&worktree_dir)
-                            .arg(&branch_name)
-                            .current_dir(&repo_dir)
-                            .output()
-                            .map(|o| o.status.success())
-                            .unwrap_or(false)
+                    match result {
+                        Ok(out) if out.status.success() => true,
+                        Ok(out) => {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            tracing::warn!("git worktree add -b failed: {stderr}");
+                            // Branch might already exist, retry without -b
+                            match std::process::Command::new("git")
+                                .args(["worktree", "add"])
+                                .arg(&worktree_dir)
+                                .arg(&branch_name)
+                                .current_dir(&repo_dir)
+                                .output()
+                            {
+                                Ok(out2) if out2.status.success() => true,
+                                Ok(out2) => {
+                                    let stderr2 = String::from_utf8_lossy(&out2.stderr);
+                                    tracing::error!("git worktree add fallback failed: {stderr2}");
+                                    false
+                                }
+                                Err(e) => {
+                                    tracing::error!("git worktree add fallback error: {e}");
+                                    false
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to run git: {e}");
+                            false
+                        }
                     }
-                    Err(_) => false,
-                };
+                })
+                .await;
 
-                if ok {
-                    let _ = ipc_bridge::send_command(
-                        &socket,
-                        &Request::New {
-                            name: Some(name),
-                            mode: SessionMode::Speaking,
-                        },
-                    );
-                } else {
-                    tracing::error!("Failed to create git worktree in {}", repo_dir.display());
-                }
-            })
-            .detach();
+            if git_ok {
+                cx.background_executor()
+                    .spawn(async move {
+                        if let Err(e) = ipc_bridge::send_command(
+                            &socket,
+                            &Request::New {
+                                name: Some(name),
+                                mode: SessionMode::Speaking,
+                            },
+                        ) {
+                            tracing::error!("IPC send_command failed for worktree session: {e}");
+                        }
+                    })
+                    .detach();
+            } else {
+                let _ = this.update(cx, |app, _cx| {
+                    app.pending_session_cwds.retain(|p| p != &wt_dir_for_cleanup);
+                });
+            }
+        })
+        .detach();
     }
 }
 
-fn worktree_session_name(repo_dir: &Path, existing_sessions: &[String]) -> String {
-    let repo_name = repo_dir
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "repo".to_string());
+impl ClaudioApp {
+    fn render_resize_borders(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let border = px(6.0);
+        let corner = px(12.0);
 
-    let prefix = format!("{repo_name}-wt-");
-    let max_idx = existing_sessions
-        .iter()
-        .filter_map(|name| name.strip_prefix(&prefix)?.parse::<u32>().ok())
-        .max()
-        .unwrap_or(0);
-
-    format!("{prefix}{}", max_idx + 1)
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            // Edges
+            .child(
+                div().absolute().top_0().left(corner).right(corner).h(border)
+                    .cursor_ns_resize()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, window, _| {
+                        window.start_window_resize(ResizeEdge::Top);
+                    })),
+            )
+            .child(
+                div().absolute().bottom_0().left(corner).right(corner).h(border)
+                    .cursor_ns_resize()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, window, _| {
+                        window.start_window_resize(ResizeEdge::Bottom);
+                    })),
+            )
+            .child(
+                div().absolute().left_0().top(corner).bottom(corner).w(border)
+                    .cursor_ew_resize()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, window, _| {
+                        window.start_window_resize(ResizeEdge::Left);
+                    })),
+            )
+            .child(
+                div().absolute().right_0().top(corner).bottom(corner).w(border)
+                    .cursor_ew_resize()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, window, _| {
+                        window.start_window_resize(ResizeEdge::Right);
+                    })),
+            )
+            // Corners
+            .child(
+                div().absolute().top_0().left_0().w(corner).h(corner)
+                    .cursor_nwse_resize()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, window, _| {
+                        window.start_window_resize(ResizeEdge::TopLeft);
+                    })),
+            )
+            .child(
+                div().absolute().top_0().right_0().w(corner).h(corner)
+                    .cursor_nesw_resize()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, window, _| {
+                        window.start_window_resize(ResizeEdge::TopRight);
+                    })),
+            )
+            .child(
+                div().absolute().bottom_0().left_0().w(corner).h(corner)
+                    .cursor_nesw_resize()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, window, _| {
+                        window.start_window_resize(ResizeEdge::BottomLeft);
+                    })),
+            )
+            .child(
+                div().absolute().bottom_0().right_0().w(corner).h(corner)
+                    .cursor_nwse_resize()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, window, _| {
+                        window.start_window_resize(ResizeEdge::BottomRight);
+                    })),
+            )
+    }
 }
 
 impl Render for ClaudioApp {
@@ -523,10 +777,13 @@ impl Render for ClaudioApp {
             .on_action(cx.listener(Self::minimize_session))
             .on_action(cx.listener(Self::toggle_file_tree))
             .on_action(cx.listener(Self::add_folder))
+            .on_action(cx.listener(Self::read_aloud))
+            .on_action(cx.listener(Self::stop_speech))
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::stop_daemon))
             .on_key_down(cx.listener(Self::handle_rename_key))
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(rgb(super::theme::BASE))
@@ -537,13 +794,41 @@ impl Render for ClaudioApp {
                     let x: f32 = ev.position.x.into();
                     app.file_tree_width = x.clamp(120.0, 600.0);
                     cx.notify();
+                } else if app.grid_resize.is_some() {
+                    let resize = app.grid_resize.as_ref().unwrap();
+                    let sensitivity = 0.005;
+                    let min_ratio = 0.1;
+                    match resize.axis {
+                        super::terminal_grid::ResizeAxis::Column(idx) => {
+                            let delta: f32 = f32::from(ev.position.x) - resize.start_position;
+                            let ratio_delta = delta * sensitivity;
+                            let (r0, r1) = resize.start_ratios;
+                            let sum = r0 + r1;
+                            let new_r0 = (r0 + ratio_delta).clamp(min_ratio, sum - min_ratio);
+                            let new_r1 = sum - new_r0;
+                            app.grid_col_ratios[idx] = new_r0;
+                            app.grid_col_ratios[idx + 1] = new_r1;
+                        }
+                        super::terminal_grid::ResizeAxis::Row(idx) => {
+                            let delta: f32 = f32::from(ev.position.y) - resize.start_position;
+                            let ratio_delta = delta * sensitivity;
+                            let (r0, r1) = resize.start_ratios;
+                            let sum = r0 + r1;
+                            let new_r0 = (r0 + ratio_delta).clamp(min_ratio, sum - min_ratio);
+                            let new_r1 = sum - new_r0;
+                            app.grid_row_ratios[idx] = new_r0;
+                            app.grid_row_ratios[idx + 1] = new_r1;
+                        }
+                    }
+                    cx.notify();
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|app, _ev: &MouseUpEvent, _window, _cx| {
                 app.file_tree_resizing = false;
+                app.grid_resize = None;
             }))
             .child({
-                let mut content = div().flex_1().flex().flex_row();
+                let mut content = div().flex_1().min_h(px(0.0)).flex().flex_row();
                 if self.file_tree.visible {
                     content = content.child(self.render_file_tree(window, cx));
                     // Resize handle
@@ -564,5 +849,186 @@ impl Render for ClaudioApp {
                 );
                 content
             })
+            .child(self.render_resize_borders(cx))
     }
+}
+
+/// Use `claude -p` to summarize terminal screen content for TTS.
+/// Returns `None` on failure (timeout, missing binary, non-zero exit).
+fn summarize_screen_for_tts(screen_text: &str) -> Option<String> {
+    use std::process::{Command, Stdio};
+
+    let prompt = format!(
+        "You are Claude Code narrating your own terminal screen to a visually impaired user. \
+         Speak in first person as if you are the one working -- e.g. 'I'm currently editing...', \
+         'I just finished running the tests...'. \
+         Summarize what's on screen naturally and conversationally. \
+         Skip file paths, box-drawing characters, command prompts, tool call headers, \
+         progress spinners, and code blocks. Focus on what you are communicating: \
+         plans, explanations, status updates, errors. Keep it concise -- this will be spoken aloud.\n\n\
+         Terminal screen content:\n{screen_text}"
+    );
+
+    let mut child = Command::new("claude")
+        .args(["-p", "--model", "haiku"])
+        .arg(&prompt)
+        .env_remove("CLAUDECODE")
+        .env_remove("CLAUDE_CODE_ENTRY_TOOL")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    // 15-second timeout
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(15);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(_) => return None,
+        }
+    }
+
+    let output = child.wait_with_output().ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+
+    Some(text)
+}
+
+/// Filter raw terminal screen text down to readable prose for TTS.
+/// Keeps natural language lines (plans, explanations, bullets) and drops
+/// code, file paths, box-drawing borders, diffs, prompts, and other noise.
+fn clean_for_tts(raw: &str) -> String {
+    let mut out = Vec::new();
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            // Preserve paragraph breaks (collapsed later)
+            if out.last().is_some_and(|l: &String| !l.is_empty()) {
+                out.push(String::new());
+            }
+            continue;
+        }
+
+        // Skip box-drawing / decorative lines
+        if trimmed.chars().all(|c| "─│┌┐└┘├┤┬┴┼╭╮╰╯━┃╋═║╔╗╚╝╠╣╦╩╬▀▄█▌▐░▒▓ -_=+*".contains(c)) {
+            continue;
+        }
+
+        // Skip lines that are mostly box-drawing (borders with some text)
+        let box_chars: usize = trimmed.chars().filter(|c| "─│┌┐└┘├┤┬┴┼╭╮╰╯━┃╋═║╔╗╚╝╠╣╦╩╬".contains(*c)).count();
+        if box_chars > 3 {
+            continue;
+        }
+
+        // Skip file paths
+        if trimmed.starts_with('/') || trimmed.starts_with("./") || trimmed.starts_with("src/") {
+            continue;
+        }
+
+        // Skip diff lines
+        if (trimmed.starts_with('+') || trimmed.starts_with('-')) && trimmed.len() > 1 && !trimmed.starts_with("- ") {
+            continue;
+        }
+        if trimmed.starts_with("@@") || trimmed.starts_with("diff ") || trimmed.starts_with("index ") {
+            continue;
+        }
+
+        // Skip prompt-like lines
+        if trimmed.starts_with("$ ") || trimmed.starts_with("❯ ") || trimmed.starts_with("> ") {
+            continue;
+        }
+
+        // Skip tool-call headers and status lines from Claude
+        if trimmed.starts_with("Read(") || trimmed.starts_with("Edit(") || trimmed.starts_with("Write(")
+            || trimmed.starts_with("Bash(") || trimmed.starts_with("Glob(") || trimmed.starts_with("Grep(")
+        {
+            continue;
+        }
+
+        // Skip progress indicators and spinners
+        if trimmed.contains("⠋") || trimmed.contains("⠙") || trimmed.contains("⠹")
+            || trimmed.contains("⠸") || trimmed.contains("⠼") || trimmed.contains("⠴")
+            || trimmed.contains("[====") || trimmed.contains("...")
+        {
+            continue;
+        }
+
+        // Heuristic: skip lines that look like code (high density of code punctuation)
+        let code_chars: usize = trimmed.chars().filter(|c| "{}();=><&|\\@#$^`~[]".contains(*c)).count();
+        let alpha_chars: usize = trimmed.chars().filter(|c| c.is_alphabetic()).count();
+        if trimmed.len() > 5 && code_chars as f32 / trimmed.len() as f32 > 0.15 && alpha_chars < code_chars * 3 {
+            continue;
+        }
+
+        // Skip lines that are mostly non-alphabetic
+        if trimmed.len() > 3 && alpha_chars as f32 / (trimmed.len() as f32) < 0.4 {
+            continue;
+        }
+
+        // Clean up markdown-style formatting for speech
+        let mut cleaned = trimmed.to_string();
+        // Strip leading bullets/numbers but keep the text
+        if let Some(rest) = cleaned.strip_prefix("- ") {
+            cleaned = rest.to_string();
+        }
+        // Strip bold/italic markers
+        cleaned = cleaned.replace("**", "").replace("__", "");
+        // Strip backticks
+        cleaned = cleaned.replace('`', "");
+        // Strip heading markers
+        while cleaned.starts_with("# ") || cleaned.starts_with("## ") || cleaned.starts_with("### ") {
+            if let Some(pos) = cleaned.find(' ') {
+                cleaned = cleaned[pos + 1..].to_string();
+            } else {
+                break;
+            }
+        }
+
+        if !cleaned.trim().is_empty() {
+            out.push(cleaned);
+        }
+    }
+
+    // Collapse multiple blank lines
+    let mut result = String::new();
+    let mut prev_blank = false;
+    for line in &out {
+        if line.is_empty() {
+            if !prev_blank {
+                result.push('\n');
+            }
+            prev_blank = true;
+        } else {
+            if prev_blank && !result.is_empty() {
+                result.push('\n');
+            }
+            if !result.is_empty() && !prev_blank {
+                result.push('\n');
+            }
+            result.push_str(line);
+            prev_blank = false;
+        }
+    }
+
+    result
 }
