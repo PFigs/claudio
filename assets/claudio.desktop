@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Claudio
+Comment=Voice-activated terminal session manager
+Exec=claudio gui
+Icon=claudio
+Terminal=false
+Type=Application
+Categories=Development;System;TerminalEmulator;
+Keywords=terminal;voice;claude;ai;

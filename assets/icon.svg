@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e1e2e"/>
+      <stop offset="100%" stop-color="#181825"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#89b4fa" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#89b4fa" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect x="16" y="16" width="480" height="480" rx="96" ry="96" fill="url(#bg)"/>
+
+  <!-- Subtle inner border -->
+  <rect x="16" y="16" width="480" height="480" rx="96" ry="96"
+        fill="none" stroke="#313244" stroke-width="2"/>
+
+  <!-- Terminal window frame -->
+  <rect x="72" y="100" width="368" height="260" rx="16" ry="16"
+        fill="#11111b" stroke="#45475a" stroke-width="2"/>
+
+  <!-- Title bar -->
+  <rect x="72" y="100" width="368" height="36" rx="16" ry="16" fill="#181825"/>
+  <rect x="72" y="120" width="368" height="16" fill="#181825"/>
+
+  <!-- Title bar dots -->
+  <circle cx="100" cy="118" r="6" fill="#f38ba8"/>
+  <circle cx="122" cy="118" r="6" fill="#f9e2af"/>
+  <circle cx="144" cy="118" r="6" fill="#a6e3a1"/>
+
+  <!-- Terminal prompt line 1: > claude -->
+  <text x="96" y="178" font-family="monospace" font-size="26" font-weight="bold" fill="#89b4fa">&gt;</text>
+  <text x="118" y="178" font-family="monospace" font-size="26" fill="#cdd6f4">claude</text>
+
+  <!-- Terminal prompt line 2: cursor blink -->
+  <text x="96" y="214" font-family="monospace" font-size="26" font-weight="bold" fill="#89b4fa">&gt;</text>
+  <rect x="118" y="198" width="14" height="22" rx="2" fill="#f5e0dc" opacity="0.8">
+    <animate attributeName="opacity" values="0.8;0.2;0.8" dur="1.2s" repeatCount="indefinite"/>
+  </rect>
+
+  <!-- Terminal output line: thinking... -->
+  <text x="96" y="250" font-family="monospace" font-size="20" fill="#6c7086" font-style="italic">thinking...</text>
+
+  <!-- Decorative code lines -->
+  <rect x="96" y="272" width="120" height="4" rx="2" fill="#45475a"/>
+  <rect x="96" y="286" width="80" height="4" rx="2" fill="#45475a"/>
+  <rect x="96" y="300" width="160" height="4" rx="2" fill="#45475a"/>
+  <rect x="96" y="314" width="60" height="4" rx="2" fill="#45475a"/>
+
+  <!-- Audio waves (right side, emanating from terminal) -->
+  <path d="M 380 400 Q 400 380, 380 360" fill="none" stroke="#94e2d5" stroke-width="4" stroke-linecap="round" opacity="0.9"/>
+  <path d="M 392 416 Q 424 380, 392 344" fill="none" stroke="#94e2d5" stroke-width="4" stroke-linecap="round" opacity="0.65"/>
+  <path d="M 404 432 Q 448 380, 404 328" fill="none" stroke="#94e2d5" stroke-width="4" stroke-linecap="round" opacity="0.4"/>
+
+  <!-- Microphone icon (bottom center) -->
+  <rect x="232" y="388" width="28" height="44" rx="14" ry="14" fill="#cba6f7"/>
+  <path d="M 220 420 Q 220 448, 246 448 Q 272 448, 272 420"
+        fill="none" stroke="#cba6f7" stroke-width="4" stroke-linecap="round"/>
+  <line x1="246" y1="448" x2="246" y2="466" stroke="#cba6f7" stroke-width="4" stroke-linecap="round"/>
+  <line x1="232" y1="466" x2="260" y2="466" stroke="#cba6f7" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Small "c" badge (bottom-left) -->
+  <circle cx="120" cy="430" r="28" fill="#89b4fa"/>
+  <text x="120" y="440" font-family="sans-serif" font-size="32" font-weight="bold"
+        fill="#1e1e2e" text-anchor="middle">c</text>
+</svg>
