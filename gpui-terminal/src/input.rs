@@ -84,7 +84,24 @@
 //! ```
 
 use alacritty_terminal::term::TermMode;
-use gpui::Keystroke;
+use gpui::{Keystroke, Modifiers};
+
+/// Compute the xterm modifier parameter for modified key sequences.
+/// Returns 1 (no modification) through 8 (Shift+Alt+Ctrl).
+/// Format: 1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0)
+fn modifier_param(modifiers: &Modifiers) -> u8 {
+    let mut param: u8 = 1;
+    if modifiers.shift {
+        param += 1;
+    }
+    if modifiers.alt {
+        param += 2;
+    }
+    if modifiers.control {
+        param += 4;
+    }
+    param
+}
 
 /// Convert a GPUI keystroke to terminal escape sequence bytes.
 ///
@@ -123,7 +140,13 @@ pub fn keystroke_to_bytes(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u
             }
             return Some(b" ".to_vec());
         }
-        "enter" => return Some(b"\r".to_vec()),
+        "enter" => {
+            let m = modifier_param(&keystroke.modifiers);
+            if m > 1 {
+                return Some(format!("\x1b[13;{}u", m).into_bytes());
+            }
+            return Some(b"\r".to_vec());
+        }
         "escape" => return Some(b"\x1b".to_vec()),
         "backspace" => return Some(b"\x7f".to_vec()),
         "tab" => {
@@ -134,35 +157,40 @@ pub fn keystroke_to_bytes(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u
             return Some(b"\t".to_vec());
         }
 
-        // Arrow keys - check APP_CURSOR mode
-        "up" => {
-            if mode.contains(TermMode::APP_CURSOR) {
-                return Some(b"\x1bOA".to_vec());
+        // Arrow keys - modified arrows use CSI 1;{mod} format
+        "up" | "down" | "right" | "left" => {
+            let letter = match keystroke.key.as_str() {
+                "up" => b'A',
+                "down" => b'B',
+                "right" => b'C',
+                "left" => b'D',
+                _ => unreachable!(),
+            };
+            let mod_param = modifier_param(&keystroke.modifiers);
+            if mod_param > 1 {
+                return Some(format!("\x1b[1;{}{}", mod_param, letter as char).into_bytes());
             }
-            return Some(b"\x1b[A".to_vec());
-        }
-        "down" => {
             if mode.contains(TermMode::APP_CURSOR) {
-                return Some(b"\x1bOB".to_vec());
+                return Some(vec![b'\x1b', b'O', letter]);
             }
-            return Some(b"\x1b[B".to_vec());
-        }
-        "right" => {
-            if mode.contains(TermMode::APP_CURSOR) {
-                return Some(b"\x1bOC".to_vec());
-            }
-            return Some(b"\x1b[C".to_vec());
-        }
-        "left" => {
-            if mode.contains(TermMode::APP_CURSOR) {
-                return Some(b"\x1bOD".to_vec());
-            }
-            return Some(b"\x1b[D".to_vec());
+            return Some(vec![b'\x1b', b'[', letter]);
         }
 
-        // Navigation keys
-        "home" => return Some(b"\x1b[H".to_vec()),
-        "end" => return Some(b"\x1b[F".to_vec()),
+        // Navigation keys - modified versions use CSI 1;{mod}{letter} or CSI {num};{mod}~
+        "home" => {
+            let m = modifier_param(&keystroke.modifiers);
+            if m > 1 {
+                return Some(format!("\x1b[1;{}H", m).into_bytes());
+            }
+            return Some(b"\x1b[H".to_vec());
+        }
+        "end" => {
+            let m = modifier_param(&keystroke.modifiers);
+            if m > 1 {
+                return Some(format!("\x1b[1;{}F", m).into_bytes());
+            }
+            return Some(b"\x1b[F".to_vec());
+        }
         "pageup" => return Some(b"\x1b[5~".to_vec()),
         "pagedown" => return Some(b"\x1b[6~".to_vec()),
         "insert" => return Some(b"\x1b[2~".to_vec()),

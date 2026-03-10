@@ -61,6 +61,7 @@
 
 use crate::colors::ColorPalette;
 use crate::event::GpuiEventProxy;
+use crate::mouse::Selection;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
 use alacritty_terminal::term::{Term, TermMode};
@@ -454,6 +455,7 @@ impl TerminalRenderer {
         bounds: Bounds<Pixels>,
         padding: Edges<Pixels>,
         term: &Term<GpuiEventProxy>,
+        selection: Option<&Selection>,
         window: &mut Window,
         _cx: &mut App,
     ) {
@@ -532,6 +534,57 @@ impl TerminalRenderer {
                     transparent_black(),
                     Default::default(),
                 ));
+            }
+
+            // Paint selection highlight
+            if let Some(sel) = selection {
+                let (sel_start, sel_end) = if sel.start <= sel.end {
+                    (sel.start, sel.end)
+                } else {
+                    (sel.end, sel.start)
+                };
+
+                let vis_line = Line(line_idx as i32);
+                if vis_line >= sel_start.line && vis_line <= sel_end.line {
+                    let col_start = if vis_line == sel_start.line {
+                        sel_start.column.0
+                    } else {
+                        0
+                    };
+                    let col_end = if vis_line == sel_end.line {
+                        sel_end.column.0 + 1
+                    } else {
+                        num_cols
+                    };
+
+                    if col_start < col_end {
+                        let x = origin.x + self.cell_width * (col_start as f32);
+                        let y = origin.y + self.cell_height * (line_idx as f32);
+                        let width = self.cell_width * ((col_end - col_start) as f32);
+
+                        let sel_bounds = Bounds {
+                            origin: Point { x, y },
+                            size: Size { width, height: self.cell_height },
+                        };
+
+                        // Semi-transparent selection color
+                        let sel_color = Hsla {
+                            h: 0.58,
+                            s: 0.6,
+                            l: 0.5,
+                            a: 0.35,
+                        };
+
+                        window.paint_quad(quad(
+                            sel_bounds,
+                            px(0.0),
+                            sel_color,
+                            Edges::<Pixels>::default(),
+                            transparent_black(),
+                            Default::default(),
+                        ));
+                    }
+                }
             }
 
             // Paint each character individually at exact cell positions
