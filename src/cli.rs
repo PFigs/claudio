@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::Stdio;
 
@@ -64,8 +65,13 @@ pub enum Command {
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         None => {
-            // Default: ensure daemon is running, then launch TUI
-            launch().await
+            if std::io::stdout().is_terminal() {
+                // Interactive: ensure daemon is running, then launch GUI
+                launch().await
+            } else {
+                // Piped: run as voice-to-text passthrough
+                crate::pipe::run().await
+            }
         }
         Some(Command::Setup) => {
             crate::setup::run_setup().await?;

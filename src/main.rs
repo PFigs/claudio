@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod daemon;
+mod pipe;
 mod setup;
 
 mod audio;
