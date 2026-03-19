@@ -157,12 +157,38 @@ fn spawn_output_scanner(
                                 &format!("{} autopilot disengaged - dangerous command detected", name),
                             );
                         } else {
-                            info!("[autopilot] auto-accepting prompt in '{}'", name);
+                            // Debug: show what we matched and a snippet of context
+                            let snippet: String = scan_lower.chars().rev().take(120).collect::<String>().chars().rev().collect();
+                            info!("[autopilot] auto-accepting prompt in '{}', keyword={:?}, snippet={:?}", name, keyword, snippet);
+                            send_desktop_notification(
+                                &format!("claudio: {} autopilot accepting", name),
+                                &format!("keyword: {:?}\nsnippet: ...{}", keyword, snippet),
+                            );
                             // Small delay to let the prompt finish rendering
-                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            std::thread::sleep(std::time::Duration::from_millis(300));
                             if let Ok(mut w) = pty_writer.lock() {
-                                let _ = w.write_all(b"y\n");
-                                let _ = w.flush();
+                                // Claude Code uses a TUI selector for permissions;
+                                // the default option ("Allow once") is pre-selected,
+                                // so pressing Enter (\r) approves it.
+                                match w.write_all(b"\r") {
+                                    Ok(()) => {
+                                        let _ = w.flush();
+                                        info!("[autopilot] wrote Enter to PTY for '{}'", name);
+                                    }
+                                    Err(e) => {
+                                        warn!("[autopilot] FAILED to write to PTY for '{}': {}", name, e);
+                                        send_desktop_notification(
+                                            &format!("claudio: {} autopilot WRITE FAILED", name),
+                                            &format!("Error: {}", e),
+                                        );
+                                    }
+                                }
+                            } else {
+                                warn!("[autopilot] FAILED to lock PTY writer for '{}'", name);
+                                send_desktop_notification(
+                                    &format!("claudio: {} autopilot LOCK FAILED", name),
+                                    "Could not lock PTY writer",
+                                );
                             }
                         }
                     } else {
