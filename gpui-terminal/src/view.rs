@@ -422,6 +422,10 @@ pub struct TerminalView {
 
     /// Cached content origin from last paint (for pixel-to-cell conversion)
     content_origin: Point<Pixels>,
+
+    /// Cached measured cell dimensions (updated each frame from font metrics)
+    cached_cell_width: Pixels,
+    cached_cell_height: Pixels,
 }
 
 impl TerminalView {
@@ -546,6 +550,8 @@ impl TerminalView {
             selection: None,
             selecting: false,
             content_origin: Point { x: px(0.0), y: px(0.0) },
+            cached_cell_width: px(0.0),
+            cached_cell_height: px(0.0),
         }
     }
 
@@ -800,8 +806,8 @@ impl TerminalView {
             let point = mouse::pixel_to_cell(
                 event.position,
                 self.content_origin,
-                self.renderer.cell_width,
-                self.renderer.cell_height,
+                self.cached_cell_width,
+                self.cached_cell_height,
             );
             let modifiers = mouse::encode_modifiers(
                 event.modifiers.shift,
@@ -822,6 +828,21 @@ impl TerminalView {
             self.renderer.cell_width,
             self.renderer.cell_height,
         );
+
+        // Ctrl+click opens URLs
+        if event.modifiers.control {
+            if let Some(url) = self.url_at_position(cell) {
+                #[cfg(target_os = "linux")]
+                let cmd = "xdg-open";
+                #[cfg(target_os = "macos")]
+                let cmd = "open";
+                #[cfg(target_os = "windows")]
+                let cmd = "start";
+
+                let _ = std::process::Command::new(cmd).arg(&url).spawn();
+                return;
+            }
+        }
 
         let sel_type = mouse::selection_type_from_clicks(event.click_count);
 
@@ -861,8 +882,8 @@ impl TerminalView {
             let point = mouse::pixel_to_cell(
                 event.position,
                 self.content_origin,
-                self.renderer.cell_width,
-                self.renderer.cell_height,
+                self.cached_cell_width,
+                self.cached_cell_height,
             );
             let modifiers = mouse::encode_modifiers(
                 event.modifiers.shift,
@@ -916,6 +937,47 @@ impl TerminalView {
         }
 
         cx.notify();
+    }
+
+    /// Find the URL at the given cell position, if any.
+    fn url_at_position(&self, point: AlacPoint) -> Option<String> {
+        self.state.with_term(|term| {
+            use alacritty_terminal::grid::Dimensions;
+            let grid = term.grid();
+            let cols = grid.columns();
+            let line = point.line;
+
+            let mut line_text = String::with_capacity(cols);
+            for col in 0..cols {
+                line_text.push(grid[AlacPoint::new(line, Column(col))].c);
+            }
+            let trimmed_len = line_text.trim_end().len();
+
+            let col = point.column.0;
+
+            for prefix in &["https://", "http://"] {
+                let mut search_from = 0;
+                while let Some(start) = line_text[search_from..trimmed_len].find(prefix) {
+                    let abs_start = search_from + start;
+                    let end = line_text[abs_start..trimmed_len]
+                        .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '`'))
+                        .map(|e| abs_start + e)
+                        .unwrap_or(trimmed_len);
+
+                    // Strip trailing punctuation that's unlikely part of the URL
+                    let url = line_text[abs_start..end].trim_end_matches(|c: char| matches!(c, '.' | ',' | ')' | ']' | ';'));
+
+                    let url_end = abs_start + url.len();
+                    if col >= abs_start && col < url_end {
+                        return Some(url.to_string());
+                    }
+
+                    search_from = abs_start + prefix.len();
+                }
+            }
+
+            None
+        })
     }
 
     /// Find word boundaries around a cell position.
@@ -1239,15 +1301,23 @@ impl Render for TerminalView {
                 canvas(
                     {
                         let entity = cx.entity().downgrade();
-                        move |bounds, _window, cx| {
-                            // Cache content origin for mouse coordinate conversion
+                        let mut measure_renderer = renderer.clone();
+                        move |bounds, window, cx| {
+                            // Measure actual cell dimensions from the font
+                            measure_renderer.measure_cell(window);
+
+                            // Cache content origin and cell dims for mouse coordinate conversion
                             let origin = Point {
                                 x: bounds.origin.x + padding.left,
                                 y: bounds.origin.y + padding.top,
                             };
                             if let Some(entity) = entity.upgrade() {
+                                let cw = measure_renderer.cell_width;
+                                let ch = measure_renderer.cell_height;
                                 entity.update(cx, |view, _cx| {
                                     view.content_origin = origin;
+                                    view.cached_cell_width = cw;
+                                    view.cached_cell_height = ch;
                                 });
                             }
                             bounds
