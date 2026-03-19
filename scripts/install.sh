@@ -182,6 +182,44 @@ else
     warn "Voice features won't work until ml_service is installed."
 fi
 
+# --- Desktop entry & icons ---
+
+APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
+mkdir -p "$APPS_DIR"
+
+# Desktop file and icons are either in DATA_DIR (release) or from source checkout
+ASSETS_DIR=""
+if [ -d "$DATA_DIR/assets" ]; then
+    ASSETS_DIR="$DATA_DIR/assets"
+elif [ -d "$DATA_DIR/../assets" ]; then
+    ASSETS_DIR="$DATA_DIR/../assets"
+fi
+
+if [ -n "$ASSETS_DIR" ] && [ -f "$ASSETS_DIR/claudio.desktop" ]; then
+    cp "$ASSETS_DIR/claudio.desktop" "$APPS_DIR/"
+
+    for size in 48 128 256; do
+        icon_dir="$ICONS_DIR/${size}x${size}/apps"
+        mkdir -p "$icon_dir"
+        if [ -f "$ASSETS_DIR/icon-${size}.png" ]; then
+            cp "$ASSETS_DIR/icon-${size}.png" "$icon_dir/claudio.png"
+        fi
+    done
+
+    if command -v update-desktop-database >/dev/null; then
+        update-desktop-database "$APPS_DIR" 2>/dev/null || true
+    fi
+    if command -v gtk-update-icon-cache >/dev/null; then
+        gtk-update-icon-cache "$ICONS_DIR" 2>/dev/null || true
+    fi
+
+    info "Installed desktop entry and icons."
+else
+    warn "Assets not found — desktop entry and icons not installed."
+    warn "The app will still work from the command line."
+fi
+
 # --- Post-install ---
 
 # Check PATH
