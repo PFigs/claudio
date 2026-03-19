@@ -216,6 +216,7 @@ pub struct AppState {
 #[serde(default)]
 pub struct GuiState {
     pub folder_roots: Vec<PathBuf>,
+    pub worktree_roots: Vec<PathBuf>,
     pub sessions: Vec<PersistedSession>,
 }
 

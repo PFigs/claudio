@@ -75,6 +75,9 @@ impl ClaudioApp {
         for root in &state.gui.folder_roots {
             file_tree.add_root(root.clone());
         }
+        for root in &state.gui.worktree_roots {
+            file_tree.add_worktree_root(root.clone());
+        }
 
         // Restore sessions from previous run
         let mut pending_session_cwds = VecDeque::new();
@@ -488,6 +491,7 @@ impl ClaudioApp {
         let state = AppState {
             gui: crate::config::GuiState {
                 folder_roots: self.file_tree.roots.clone(),
+                worktree_roots: self.file_tree.worktree_roots.clone(),
                 sessions: self
                     .sessions
                     .iter()
@@ -744,6 +748,12 @@ impl ClaudioApp {
                 .await;
 
             if git_ok {
+                let wt_dir_for_tree = wt_dir_for_cleanup.clone();
+                let _ = this.update(cx, |app, cx| {
+                    app.file_tree.add_worktree_root(wt_dir_for_tree);
+                    app.save_state();
+                    cx.notify();
+                });
                 cx.background_executor()
                     .spawn(async move {
                         if let Err(e) = ipc_bridge::send_command(

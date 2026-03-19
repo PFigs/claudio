@@ -40,6 +40,7 @@ const SKIP_DIRS: &[&str] = &[
 
 pub struct FileTree {
     pub roots: Vec<PathBuf>,
+    pub worktree_roots: Vec<PathBuf>,
     pub expanded: HashSet<PathBuf>,
     pub visible: bool,
     pub search_query: String,
@@ -52,6 +53,7 @@ impl FileTree {
     pub fn new() -> Self {
         Self {
             roots: Vec::new(),
+            worktree_roots: Vec::new(),
             expanded: HashSet::new(),
             visible: true,
             search_query: String::new(),
@@ -80,8 +82,16 @@ impl FileTree {
         }
     }
 
+    pub fn add_worktree_root(&mut self, path: PathBuf) {
+        if !self.worktree_roots.contains(&path) {
+            self.worktree_roots.push(path);
+            self.worktree_roots.sort();
+        }
+    }
+
     pub fn remove_root(&mut self, path: &PathBuf) {
         self.roots.retain(|r| r != path);
+        self.worktree_roots.retain(|r| r != path);
         self.expanded.retain(|p| !p.starts_with(path));
     }
 
@@ -143,7 +153,10 @@ impl ClaudioApp {
             .min_h(px(0.0))
             .overflow_y_scroll();
 
-        if self.file_tree.roots.is_empty() {
+        let has_roots = !self.file_tree.roots.is_empty();
+        let has_worktrees = !self.file_tree.worktree_roots.is_empty();
+
+        if !has_roots && !has_worktrees {
             content = content.child(
                 div()
                     .px(px(8.0))
@@ -158,6 +171,12 @@ impl ClaudioApp {
                 for root in &self.file_tree.roots {
                     content = content.child(self.render_root_node(root, cx));
                 }
+                if has_worktrees {
+                    content = content.child(self.render_worktree_divider());
+                    for root in &self.file_tree.worktree_roots {
+                        content = content.child(self.render_root_node(root, cx));
+                    }
+                }
             } else {
                 let query_lower = query.to_lowercase();
                 let mut has_results = false;
@@ -165,6 +184,21 @@ impl ClaudioApp {
                     if let Some(el) = self.render_filtered_root_node(root, &query_lower, cx) {
                         content = content.child(el);
                         has_results = true;
+                    }
+                }
+                if has_worktrees {
+                    let mut wt_results = Vec::new();
+                    for root in &self.file_tree.worktree_roots {
+                        if let Some(el) = self.render_filtered_root_node(root, &query_lower, cx) {
+                            wt_results.push(el);
+                        }
+                    }
+                    if !wt_results.is_empty() {
+                        has_results = true;
+                        content = content.child(self.render_worktree_divider());
+                        for el in wt_results {
+                            content = content.child(el);
+                        }
                     }
                 }
                 if !has_results {
@@ -190,6 +224,35 @@ impl ClaudioApp {
             .child(header)
             .child(search_bar)
             .child(content)
+            .into_any_element()
+    }
+
+    fn render_worktree_divider(&self) -> AnyElement {
+        div()
+            .px(px(8.0))
+            .py(px(6.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .h(px(1.0))
+                    .flex_1()
+                    .bg(rgb(theme::SURFACE0)),
+            )
+            .child(
+                div()
+                    .child("Worktrees")
+                    .text_color(rgb(theme::OVERLAY0))
+                    .text_size(px(11.0)),
+            )
+            .child(
+                div()
+                    .h(px(1.0))
+                    .flex_1()
+                    .bg(rgb(theme::SURFACE0)),
+            )
             .into_any_element()
     }
 
