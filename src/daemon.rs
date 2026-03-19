@@ -233,11 +233,7 @@ async fn handle_utterance(
     let pcm_bytes = samples_to_bytes(audio);
     let text = ml.lock().await.transcribe(&pcm_bytes).await?;
     let text = text.trim();
-    let text = if text.ends_with('.') {
-        text.to_string()
-    } else {
-        format!("{text} ")
-    };
+    let text = format!("{text} ");
 
     if text.is_empty() {
         info!("STT returned empty text, skipping");

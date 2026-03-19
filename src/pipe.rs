@@ -208,11 +208,7 @@ async fn transcribe(audio: &[i16], ml: &Arc<Mutex<MlBridgeClient>>) -> Result<St
     let pcm_bytes = samples_to_bytes(audio);
     let text = ml.lock().await.transcribe(&pcm_bytes).await?;
     let text = text.trim();
-    let text = if text.ends_with('.') {
-        text.to_string()
-    } else {
-        format!("{text} ")
-    };
+    let text = format!("{text} ");
     info!("Transcribed: {text}");
     Ok(text)
 }
