@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use gpui::*;
 
 use super::app::ClaudioApp;
@@ -178,7 +180,13 @@ impl ClaudioApp {
 
         let session_id_focus = session.id.clone();
         let session_id_min = session.id.clone();
+        let session_id_ap = session.id.clone();
         let terminal_view = session.terminal_view.clone();
+
+        let autopilot_on = session.autopilot.load(Ordering::Relaxed);
+        let autopilot_clone = session.autopilot.clone();
+        let ap_label = if autopilot_on { "AP" } else { "ap" };
+        let ap_color = if autopilot_on { theme::GREEN } else { theme::OVERLAY0 };
 
         div()
             .size_full()
@@ -212,17 +220,41 @@ impl ClaudioApp {
                     )
                     .child(
                         div()
-                            .child("_")
-                            .text_color(rgb(theme::OVERLAY0))
-                            .text_size(px(12.0))
-                            .cursor_pointer()
-                            .px(px(4.0))
-                            .on_mouse_down(MouseButton::Left, cx.listener(move |app, _ev, _window, cx| {
-                                if let Some(s) = app.sessions.iter_mut().find(|s| s.id == session_id_min) {
-                                    s.minimized = true;
-                                }
-                                cx.notify();
-                            })),
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(4.0))
+                            // Autopilot toggle
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("ap-{}", session_id_ap)))
+                                    .child(ap_label)
+                                    .text_color(rgb(ap_color))
+                                    .text_size(px(12.0))
+                                    .cursor_pointer()
+                                    .px(px(4.0))
+                                    .hover(|s| s.text_color(rgb(theme::GREEN)))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(move |_app, _ev, _window, cx| {
+                                        let prev = autopilot_clone.load(Ordering::Relaxed);
+                                        autopilot_clone.store(!prev, Ordering::Relaxed);
+                                        cx.notify();
+                                    })),
+                            )
+                            // Minimize button
+                            .child(
+                                div()
+                                    .child("_")
+                                    .text_color(rgb(theme::OVERLAY0))
+                                    .text_size(px(12.0))
+                                    .cursor_pointer()
+                                    .px(px(4.0))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(move |app, _ev, _window, cx| {
+                                        if let Some(s) = app.sessions.iter_mut().find(|s| s.id == session_id_min) {
+                                            s.minimized = true;
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             )
             // Terminal view

@@ -10,3 +10,4 @@ pub const RED: u32 = 0xf38ba8;
 pub const GREEN: u32 = 0xa6e3a1;
 pub const BLUE: u32 = 0x89b4fa;
 pub const TEAL: u32 = 0x94e2d5;
+pub const YELLOW: u32 = 0xf9e2af;

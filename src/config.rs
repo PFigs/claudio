@@ -220,9 +220,21 @@ pub struct GuiState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PersistedSession {
     pub name: String,
     pub cwd: Option<PathBuf>,
+    pub shell_mode: bool,
+}
+
+impl Default for PersistedSession {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            cwd: None,
+            shell_mode: false,
+        }
+    }
 }
 
 impl AppState {

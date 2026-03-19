@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use gpui::*;
@@ -25,6 +26,7 @@ pub struct ClaudioApp {
     needs_focus_sync: bool,
     pub file_tree: FileTree,
     pending_session_cwds: VecDeque<PathBuf>,
+    pending_shell_modes: VecDeque<bool>,
     pub renaming_session_id: Option<String>,
     pub rename_input: String,
     pub pending_worktree_repo: Option<PathBuf>,
@@ -76,6 +78,7 @@ impl ClaudioApp {
 
         // Restore sessions from previous run
         let mut pending_session_cwds = VecDeque::new();
+        let mut pending_shell_modes = VecDeque::new();
         let restore_socket = socket_path.to_path_buf();
         let persisted_sessions = state.gui.sessions.clone();
         if !persisted_sessions.is_empty() {
@@ -83,6 +86,7 @@ impl ClaudioApp {
                 if let Some(ref cwd) = ps.cwd {
                     pending_session_cwds.push_back(cwd.clone());
                 }
+                pending_shell_modes.push_back(ps.shell_mode);
             }
             cx.background_executor()
                 .spawn(async move {
@@ -110,6 +114,7 @@ impl ClaudioApp {
             needs_focus_sync: false,
             file_tree,
             pending_session_cwds,
+            pending_shell_modes,
             renaming_session_id: None,
             rename_input: String::new(),
             pending_worktree_repo: None,
@@ -158,7 +163,8 @@ impl ClaudioApp {
             DaemonEvent::SessionCreated { session } => {
                 if !self.sessions.iter().any(|s| s.id == session.id) {
                     let cwd = self.pending_session_cwds.pop_front();
-                    let state = SessionState::new_with_cwd(session, cwd, self.socket_path.clone(), cx);
+                    let shell_mode = self.pending_shell_modes.pop_front().unwrap_or(false);
+                    let state = SessionState::new_with_cwd(session, cwd, shell_mode, self.socket_path.clone(), cx);
                     self.sessions.push(state);
                     self.save_state();
                 }
@@ -239,6 +245,27 @@ impl ClaudioApp {
     // Action handlers
 
     fn new_session(&mut self, _: &NewSession, _window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_shell_modes.push_back(false);
+        let socket = self.socket_path.clone();
+        cx.background_executor()
+            .spawn(async move {
+                let _ = ipc_bridge::send_command(
+                    &socket,
+                    &Request::New {
+                        name: None,
+                        mode: SessionMode::Speaking,
+                    },
+                );
+            })
+            .detach();
+    }
+
+    fn new_shell_session(&mut self, _: &NewShellSession, _window: &mut Window, cx: &mut Context<Self>) {
+        self.create_shell_session(cx);
+    }
+
+    pub fn create_shell_session(&mut self, cx: &mut Context<Self>) {
+        self.pending_shell_modes.push_back(true);
         let socket = self.socket_path.clone();
         cx.background_executor()
             .spawn(async move {
@@ -345,8 +372,31 @@ impl ClaudioApp {
         cx.notify();
     }
 
+    fn focus_file_tree_search(
+        &mut self,
+        _: &FocusFileTreeSearch,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.file_tree.visible {
+            self.file_tree.visible = true;
+        }
+        self.file_tree.search_active = !self.file_tree.search_active;
+        cx.notify();
+    }
+
     fn add_folder(&mut self, _: &AddFolder, _window: &mut Window, cx: &mut Context<Self>) {
         self.open_add_folder_dialog(cx);
+    }
+
+    fn toggle_autopilot(&mut self, _: &ToggleAutopilot, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ref id) = self.focused_session_id {
+            if let Some(session) = self.sessions.iter().find(|s| &s.id == id) {
+                let prev = session.autopilot.load(Ordering::Relaxed);
+                session.autopilot.store(!prev, Ordering::Relaxed);
+                cx.notify();
+            }
+        }
     }
 
     fn stop_speech(&mut self, _: &StopSpeech, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -444,6 +494,7 @@ impl ClaudioApp {
                     .map(|s| crate::config::PersistedSession {
                         name: s.name.clone(),
                         cwd: s.cwd.clone(),
+                        shell_mode: s.shell_mode,
                     })
                     .collect(),
             },
@@ -554,22 +605,43 @@ impl ClaudioApp {
             }
             return;
         }
-        if self.renaming_session_id.is_none() {
+        if self.renaming_session_id.is_some() {
+            let key = ev.keystroke.key.as_str();
+            match key {
+                "enter" => self.commit_rename(cx),
+                "escape" => self.cancel_rename(cx),
+                "backspace" => {
+                    self.rename_input.pop();
+                    cx.notify();
+                }
+                _ => {
+                    if let Some(ch) = &ev.keystroke.key_char {
+                        if !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
+                            self.rename_input.push_str(ch);
+                            cx.notify();
+                        }
+                    }
+                }
+            }
             return;
         }
-        let key = ev.keystroke.key.as_str();
-        match key {
-            "enter" => self.commit_rename(cx),
-            "escape" => self.cancel_rename(cx),
-            "backspace" => {
-                self.rename_input.pop();
-                cx.notify();
-            }
-            _ => {
-                if let Some(ch) = &ev.keystroke.key_char {
-                    if !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
-                        self.rename_input.push_str(ch);
-                        cx.notify();
+        if self.file_tree.search_active {
+            let key = ev.keystroke.key.as_str();
+            match key {
+                "escape" => {
+                    self.file_tree.search_active = false;
+                    cx.notify();
+                }
+                "backspace" => {
+                    self.file_tree.search_query.pop();
+                    cx.notify();
+                }
+                _ => {
+                    if let Some(ch) = &ev.keystroke.key_char {
+                        if !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
+                            self.file_tree.search_query.push_str(ch);
+                            cx.notify();
+                        }
                     }
                 }
             }
@@ -578,6 +650,7 @@ impl ClaudioApp {
 
     pub fn new_session_in_dir(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
         self.pending_session_cwds.push_back(dir);
+        self.pending_shell_modes.push_back(false);
         let socket = self.socket_path.clone();
         cx.background_executor()
             .spawn(async move {
@@ -618,13 +691,14 @@ impl ClaudioApp {
     }
 
     pub fn new_worktree_session_in_dir(&mut self, repo_dir: PathBuf, session_name: String, cx: &mut Context<Self>) {
-        let worktree_dir = repo_dir.join(".worktree").join(format!("claudio-{session_name}"));
-        let branch_name = format!("claudio-{session_name}");
+        let worktree_dir = repo_dir.join(".worktree").join(&session_name);
+        let branch_name = session_name.clone();
         let socket = self.socket_path.clone();
         let name = session_name.clone();
         let wt_dir_for_cleanup = worktree_dir.clone();
 
         self.pending_session_cwds.push_back(worktree_dir.clone());
+        self.pending_shell_modes.push_back(false);
 
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
             let git_ok = cx.background_executor()
@@ -771,16 +845,19 @@ impl Render for ClaudioApp {
             .key_context("ClaudioApp")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::new_session))
+            .on_action(cx.listener(Self::new_shell_session))
             .on_action(cx.listener(Self::kill_focused))
             .on_action(cx.listener(Self::cycle_focus))
             .on_action(cx.listener(Self::toggle_mode))
             .on_action(cx.listener(Self::minimize_session))
             .on_action(cx.listener(Self::toggle_file_tree))
+            .on_action(cx.listener(Self::focus_file_tree_search))
             .on_action(cx.listener(Self::add_folder))
             .on_action(cx.listener(Self::read_aloud))
             .on_action(cx.listener(Self::stop_speech))
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::stop_daemon))
+            .on_action(cx.listener(Self::toggle_autopilot))
             .on_key_down(cx.listener(Self::handle_rename_key))
             .size_full()
             .relative()

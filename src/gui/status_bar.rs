@@ -17,9 +17,20 @@ impl ClaudioApp {
             .gap(px(8.0))
             .child(
                 div()
+                    .id("sidebar-toggle")
                     .child("claudio")
-                    .text_color(rgb(theme::TEXT))
-                    .text_size(px(14.0)),
+                    .text_color(if self.file_tree.visible {
+                        rgb(theme::BLUE)
+                    } else {
+                        rgb(theme::TEXT)
+                    })
+                    .text_size(px(14.0))
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(theme::BLUE)))
+                    .on_mouse_down(MouseButton::Left, cx.listener(|app, _ev, _window, cx| {
+                        app.file_tree.toggle_visible();
+                        cx.notify();
+                    })),
             )
             .child(div().w(px(16.0)));
 
@@ -27,6 +38,23 @@ impl ClaudioApp {
         for session in &self.sessions {
             bar = bar.child(self.render_pill(session, cx));
         }
+
+        // New shell session button
+        bar = bar.child(
+            div()
+                .id("new-shell-session")
+                .child("+sh")
+                .text_color(rgb(theme::OVERLAY0))
+                .text_size(px(12.0))
+                .px(px(6.0))
+                .py(px(2.0))
+                .rounded(px(8.0))
+                .cursor_pointer()
+                .hover(|s| s.text_color(rgb(theme::GREEN)).bg(rgb(theme::SURFACE0)))
+                .on_mouse_down(MouseButton::Left, cx.listener(|app, _ev, _window, cx| {
+                    app.create_shell_session(cx);
+                })),
+        );
 
         // Worktree naming input
         if self.pending_worktree_repo.is_some() {
@@ -111,7 +139,7 @@ impl ClaudioApp {
                 .cursor_pointer()
                 .hover(|s| s.text_color(rgb(theme::TEAL)))
                 .on_mouse_down(MouseButton::Left, cx.listener(|_app, _ev, _window, _cx| {
-                    super::session_state::send_desktop_notification("test-session");
+                    super::session_state::send_desktop_notification("claudio: test", "test notification");
                 })),
         );
 
@@ -142,19 +170,13 @@ impl ClaudioApp {
             "o"
         };
 
-        let mode_icon = match session.mode.as_str() {
-            "speaking" => " mic",
-            "listening" => " ear",
-            "muted" => " x",
-            _ => "",
-        };
-
         let bg = if is_focused { theme::BLUE } else { theme::SURFACE0 };
         let fg = if is_focused { theme::CRUST } else { theme::TEXT };
 
         let session_id = session.id.clone();
         let session_id_right = session.id.clone();
         let session_id_kill = session.id.clone();
+        let session_id_editor = session.id.clone();
         let is_minimized = session.minimized;
 
         let name_element: AnyElement = if is_renaming {
@@ -203,7 +225,22 @@ impl ClaudioApp {
                     .text_size(px(12.0))
                     .child(icon)
                     .child(name_element)
-                    .child(mode_icon)
+                    .child(
+                        div()
+                            .child("\u{270e}")
+                            .text_size(px(11.0))
+                            .text_color(rgb(theme::OVERLAY0))
+                            .pl(px(4.0))
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(rgb(theme::BLUE)))
+                            .on_mouse_down(MouseButton::Left, cx.listener(move |app, _ev, _window, _cx| {
+                                if let Some(session) = app.sessions.iter().find(|s| s.id == session_id_editor) {
+                                    if let Some(ref cwd) = session.cwd {
+                                        app.open_in_editor(cwd);
+                                    }
+                                }
+                            })),
+                    )
                     .child(
                         div()
                             .child("x")

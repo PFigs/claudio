@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gpui;
@@ -45,6 +46,20 @@ const NOTIFY_KEYWORDS: &[&str] = &[
     "[y/n]",
 ];
 
+/// Dangerous command patterns that cause autopilot to disengage.
+/// Matched case-insensitively against the current output chunk.
+/// Keep patterns specific to avoid false positives from Claude's explanatory text.
+const DANGER_PATTERNS: &[&str] = &[
+    "rm -rf /",
+    "git push --force",
+    "git push -f",
+    "git reset --hard",
+    "chmod 777",
+    "dd if=",
+    "mkfs",
+    "> /dev/",
+];
+
 /// Strip ANSI escape sequences and control characters from a byte buffer for keyword scanning.
 fn strip_ansi(buf: &[u8]) -> String {
     let stripped = strip_ansi_escapes::strip(buf);
@@ -55,10 +70,7 @@ fn strip_ansi(buf: &[u8]) -> String {
 }
 
 /// Send a desktop notification via notify-send.
-pub fn send_desktop_notification(session_name: &str) {
-    let summary = format!("claudio: {}", session_name);
-    let body = format!("{} is requesting your help", session_name);
-
+pub fn send_desktop_notification(summary: &str, body: &str) {
     let mut cmd = std::process::Command::new("notify-send");
     cmd.arg("--urgency=normal")
         .arg("-t")
@@ -72,19 +84,22 @@ pub fn send_desktop_notification(session_name: &str) {
         }
     }
 
-    cmd.arg(&summary).arg(&body);
+    cmd.arg(summary).arg(body);
 
     match cmd.spawn() {
-        Ok(_) => info!("[notify] notification sent for '{}'", session_name),
+        Ok(_) => info!("[notify] notification sent: {}", summary),
         Err(e) => warn!("[notify] notify-send failed: {}", e),
     }
 }
 
 /// Spawn a proxy thread that reads PTY output, forwards it to a pipe for
-/// TerminalView, and scans for keywords to trigger desktop notifications.
+/// TerminalView, and scans for keywords to trigger desktop notifications
+/// or autopilot auto-accept.
 fn spawn_output_scanner(
     mut pty_reader: Box<dyn Read + Send>,
     session_name: Arc<Mutex<String>>,
+    autopilot: Arc<AtomicBool>,
+    pty_writer: Arc<Mutex<Box<dyn Write + Send>>>,
 ) -> Box<dyn Read + Send> {
     let (sock_read, sock_write) = std::os::unix::net::UnixStream::pair()
         .expect("Failed to create socket pair");
@@ -121,19 +136,48 @@ fn spawn_output_scanner(
             }
 
             let scan_lower = scan.to_lowercase();
+            let chunk_lower = text.to_lowercase();
             trace!("[notify] stripped chunk: {:?}", &scan_lower);
 
             for keyword in NOTIFY_KEYWORDS {
                 if scan_lower.contains(keyword) {
                     let name = session_name.lock().unwrap().clone();
-                    // Debounce: at most one notification per 10 seconds
-                    if last_notified.elapsed() < std::time::Duration::from_secs(10) {
-                        debug!("[notify] keyword {:?} matched but debounced in session '{}'", keyword, name);
-                        break;
+
+                    if autopilot.load(Ordering::Relaxed) {
+                        // Only check the current chunk for danger patterns, not
+                        // the historical tail. Claude's explanatory text often
+                        // mentions dangerous commands without them being proposed.
+                        let has_danger = DANGER_PATTERNS.iter().any(|p| chunk_lower.contains(p));
+
+                        if has_danger {
+                            autopilot.store(false, Ordering::Relaxed);
+                            info!("[autopilot] dangerous command detected in '{}', disengaging", name);
+                            send_desktop_notification(
+                                &format!("claudio: {} AUTOPILOT OFF", name),
+                                &format!("{} autopilot disengaged - dangerous command detected", name),
+                            );
+                        } else {
+                            info!("[autopilot] auto-accepting prompt in '{}'", name);
+                            // Small delay to let the prompt finish rendering
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            if let Ok(mut w) = pty_writer.lock() {
+                                let _ = w.write_all(b"y\n");
+                                let _ = w.flush();
+                            }
+                        }
+                    } else {
+                        // Debounce: at most one notification per 10 seconds
+                        if last_notified.elapsed() < std::time::Duration::from_secs(10) {
+                            debug!("[notify] keyword {:?} matched but debounced in session '{}'", keyword, name);
+                            break;
+                        }
+                        last_notified = std::time::Instant::now();
+                        info!("[notify] keyword {:?} matched in session '{}'", keyword, name);
+                        send_desktop_notification(
+                            &format!("claudio: {}", name),
+                            &format!("{} is requesting your help", name),
+                        );
                     }
-                    last_notified = std::time::Instant::now();
-                    info!("[notify] keyword {:?} matched in session '{}'", keyword, name);
-                    send_desktop_notification(&name);
                     break;
                 }
             }
@@ -150,8 +194,10 @@ pub struct SessionState {
     pub focused: bool,
     pub busy: bool,
     pub minimized: bool,
+    pub shell_mode: bool,
     pub cwd: Option<PathBuf>,
     pub terminal_view: gpui::Entity<TerminalView>,
+    pub autopilot: Arc<AtomicBool>,
     voice_writer: Arc<Mutex<Box<dyn Write + Send>>>,
     notify_name: Arc<Mutex<String>>,
 }
@@ -160,6 +206,7 @@ impl SessionState {
     pub fn new_with_cwd(
         info: SessionInfo,
         cwd: Option<PathBuf>,
+        shell_mode: bool,
         socket_path: PathBuf,
         cx: &mut gpui::Context<super::app::ClaudioApp>,
     ) -> Self {
@@ -175,7 +222,11 @@ impl SessionState {
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let mut cmd = CommandBuilder::new(&shell);
-        cmd.args(["-c", &format!("claude; exec {}", shell)]);
+        if shell_mode {
+            cmd.args(["-c", &format!("exec {}", shell)]);
+        } else {
+            cmd.args(["-c", &format!("claude; exec {}", shell)]);
+        }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         if let Some(ref dir) = cwd {
@@ -190,11 +241,18 @@ impl SessionState {
 
         let pty_reader = pair.master.try_clone_reader().expect("Failed to clone PTY reader");
         let notify_name = Arc::new(Mutex::new(info.name.clone()));
-        let reader = spawn_output_scanner(pty_reader, Arc::clone(&notify_name));
+        let autopilot = Arc::new(AtomicBool::new(false));
 
         // take_writer() can only be called once; share via Arc<Mutex<>>
         let writer = pair.master.take_writer().expect("Failed to take PTY writer");
         let shared_writer = Arc::new(Mutex::new(writer));
+
+        let reader = spawn_output_scanner(
+            pty_reader,
+            Arc::clone(&notify_name),
+            Arc::clone(&autopilot),
+            Arc::clone(&shared_writer),
+        );
         let kb_writer = SharedWriter {
             inner: Arc::clone(&shared_writer),
         };
@@ -246,8 +304,10 @@ impl SessionState {
             focused: info.focused,
             busy: info.busy,
             minimized: false,
+            shell_mode,
             cwd,
             terminal_view,
+            autopilot,
             voice_writer: shared_writer,
             notify_name,
         }
