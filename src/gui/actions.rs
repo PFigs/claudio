@@ -16,6 +16,7 @@ actions!(
         StopSpeech,
         Quit,
         StopDaemon,
+        RestartDaemon,
         ToggleAutopilot,
     ]
 );

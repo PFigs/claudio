@@ -85,10 +85,10 @@ impl ClaudioApp {
         let restore_socket = socket_path.to_path_buf();
         let persisted_sessions = state.gui.sessions.clone();
         if !persisted_sessions.is_empty() {
+            let default_cwd = file_tree.roots.first().cloned()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
             for ps in &persisted_sessions {
-                if let Some(ref cwd) = ps.cwd {
-                    pending_session_cwds.push_back(cwd.clone());
-                }
+                pending_session_cwds.push_back(ps.cwd.clone().unwrap_or_else(|| default_cwd.clone()));
                 pending_shell_modes.push_back(ps.shell_mode);
             }
             cx.background_executor()
@@ -248,6 +248,7 @@ impl ClaudioApp {
     // Action handlers
 
     fn new_session(&mut self, _: &NewSession, _window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_session_cwds.push_back(self.default_cwd());
         self.pending_shell_modes.push_back(false);
         let socket = self.socket_path.clone();
         cx.background_executor()
@@ -268,6 +269,7 @@ impl ClaudioApp {
     }
 
     pub fn create_shell_session(&mut self, cx: &mut Context<Self>) {
+        self.pending_session_cwds.push_back(self.default_cwd());
         self.pending_shell_modes.push_back(true);
         let socket = self.socket_path.clone();
         cx.background_executor()
@@ -368,6 +370,175 @@ impl ClaudioApp {
             })
             .detach();
         cx.quit();
+    }
+
+    fn restart_daemon_action(&mut self, _: &RestartDaemon, _window: &mut Window, cx: &mut Context<Self>) {
+        self.restart_daemon(cx);
+    }
+
+    pub fn restart_daemon(&mut self, cx: &mut Context<Self>) {
+        let socket = self.socket_path.clone();
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            // Stop the daemon
+            let stop_socket = socket.clone();
+            cx.background_executor()
+                .spawn(async move {
+                    let _ = ipc_bridge::send_command(&stop_socket, &Request::Stop);
+                })
+                .await;
+
+            // Wait for the daemon to die (socket becomes unconnectable)
+            for _ in 0..40 {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                let probe_socket = socket.clone();
+                let still_alive = cx
+                    .background_executor()
+                    .spawn(async move {
+                        ipc_bridge::send_command(&probe_socket, &Request::Ping).is_ok()
+                    })
+                    .await;
+                if !still_alive {
+                    break;
+                }
+            }
+
+            // Force cleanup stale files
+            let config = crate::config::Config::load().ok();
+            if let Some(ref config) = config {
+                let pid_path = config.pid_path();
+                if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+                    if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                        unsafe {
+                            libc::kill(pid, libc::SIGTERM);
+                        }
+                    }
+                }
+                let _ = std::process::Command::new("pkill")
+                    .args(["-f", "ok-claude-ml"])
+                    .status();
+                let _ = std::fs::remove_file(&pid_path);
+                let _ = std::fs::remove_file(config.socket_path());
+                let ml_sock = config
+                    .socket_path()
+                    .parent()
+                    .unwrap_or(&PathBuf::from("/tmp"))
+                    .join("ok_claude_ml.sock");
+                let _ = std::fs::remove_file(&ml_sock);
+            }
+
+            // Start daemon in background
+            let exe = std::env::current_exe().ok();
+            if let Some(exe) = exe {
+                let log_path = crate::config::Config::runtime_dir().join("claudio.log");
+                if let Some(parent) = log_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Ok(log_file) = std::fs::File::create(&log_path) {
+                    if let Ok(log_file2) = log_file.try_clone() {
+                        let _ = std::process::Command::new(exe)
+                            .args(["start", "--foreground"])
+                            .stdout(std::process::Stdio::from(log_file2))
+                            .stderr(std::process::Stdio::from(log_file))
+                            .stdin(std::process::Stdio::null())
+                            .spawn();
+                    }
+                }
+            }
+
+            // Wait for daemon to come up
+            let mut started = false;
+            for _ in 0..60 {
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                let probe_socket = socket.clone();
+                let alive = cx
+                    .background_executor()
+                    .spawn(async move {
+                        ipc_bridge::send_command(&probe_socket, &Request::Ping).is_ok()
+                    })
+                    .await;
+                if alive {
+                    started = true;
+                    break;
+                }
+            }
+
+            if !started {
+                tracing::error!("Daemon did not start after restart");
+                return;
+            }
+
+            // Reconnect IPC subscription
+            let (tx, rx) = flume::unbounded::<DaemonEvent>();
+            let sub_socket = socket.clone();
+            std::thread::spawn(move || {
+                ipc_bridge::run_subscription(&sub_socket, tx);
+            });
+
+            // Re-create sessions from current state
+            let session_names: Vec<(String, bool)> = this
+                .update(cx, |app, cx| {
+                    app.sessions.clear();
+                    app.focused_session_id = None;
+                    app.ptt_active = false;
+                    app.vad_speaking = false;
+                    app.last_transcription = None;
+                    cx.notify();
+
+                    let state = AppState::load();
+                    state
+                        .gui
+                        .sessions
+                        .iter()
+                        .map(|ps| (ps.name.clone(), ps.shell_mode))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Queue cwds/shell modes and request sessions from daemon
+            if !session_names.is_empty() {
+                let state = AppState::load();
+                let _ = this.update(cx, |app, _cx| {
+                    let default_cwd = app.default_cwd();
+                    for ps in &state.gui.sessions {
+                        app.pending_session_cwds.push_back(
+                            ps.cwd.clone().unwrap_or_else(|| default_cwd.clone()),
+                        );
+                        app.pending_shell_modes.push_back(ps.shell_mode);
+                    }
+                });
+                let create_socket = socket.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        for (name, _shell) in session_names {
+                            let _ = ipc_bridge::send_command(
+                                &create_socket,
+                                &Request::New {
+                                    name: Some(name),
+                                    mode: SessionMode::Speaking,
+                                },
+                            );
+                        }
+                    })
+                    .await;
+            }
+
+            // Poll new subscription for events
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+                while let Ok(event) = rx.try_recv() {
+                    let _ = this.update(cx, |app, cx| {
+                        app.handle_daemon_event(event, cx);
+                    });
+                }
+            }
+        })
+        .detach();
     }
 
     fn toggle_file_tree(&mut self, _: &ToggleFileTree, _window: &mut Window, cx: &mut Context<Self>) {
@@ -485,6 +656,11 @@ impl ClaudioApp {
                 });
             }
         }
+    }
+
+    fn default_cwd(&self) -> PathBuf {
+        self.file_tree.roots.first().cloned()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     }
 
     pub fn save_state(&self) {
@@ -867,6 +1043,7 @@ impl Render for ClaudioApp {
             .on_action(cx.listener(Self::stop_speech))
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::stop_daemon))
+            .on_action(cx.listener(Self::restart_daemon_action))
             .on_action(cx.listener(Self::toggle_autopilot))
             .on_key_down(cx.listener(Self::handle_rename_key))
             .size_full()

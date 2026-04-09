@@ -825,8 +825,8 @@ impl TerminalView {
         let cell = mouse::pixel_to_cell(
             event.position,
             self.content_origin,
-            self.renderer.cell_width,
-            self.renderer.cell_height,
+            self.cached_cell_width,
+            self.cached_cell_height,
         );
 
         // Ctrl+click opens URLs
@@ -928,8 +928,8 @@ impl TerminalView {
         let cell = mouse::pixel_to_cell(
             event.position,
             self.content_origin,
-            self.renderer.cell_width,
-            self.renderer.cell_height,
+            self.cached_cell_width,
+            self.cached_cell_height,
         );
 
         if let Some(ref mut sel) = self.selection {
@@ -1267,8 +1267,8 @@ impl TerminalView {
     fn calculate_dimensions(&self, bounds: Bounds<Pixels>) -> (usize, usize) {
         let width_f32: f32 = bounds.size.width.into();
         let height_f32: f32 = bounds.size.height.into();
-        let cell_width_f32: f32 = self.renderer.cell_width.into();
-        let cell_height_f32: f32 = self.renderer.cell_height.into();
+        let cell_width_f32: f32 = self.cached_cell_width.into();
+        let cell_height_f32: f32 = self.cached_cell_height.into();
 
         let cols = ((width_f32 / cell_width_f32) as usize).max(1);
         let rows = ((height_f32 / cell_height_f32) as usize).max(1);

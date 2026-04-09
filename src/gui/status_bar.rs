@@ -143,6 +143,21 @@ impl ClaudioApp {
                 })),
         );
 
+        // Restart daemon
+        bar = bar.child(
+            div()
+                .id("restart-daemon")
+                .child("\u{21bb}")
+                .text_color(rgb(theme::OVERLAY0))
+                .text_size(px(14.0))
+                .px(px(6.0))
+                .cursor_pointer()
+                .hover(|s| s.text_color(rgb(theme::YELLOW)))
+                .on_mouse_down(MouseButton::Left, cx.listener(|app, _ev, _window, cx| {
+                    app.restart_daemon(cx);
+                })),
+        );
+
         // Close app
         bar = bar.child(
             div()
