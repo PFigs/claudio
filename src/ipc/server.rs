@@ -209,7 +209,7 @@ async fn dispatch(
             let _ = shutdown_tx.send(true);
             Response::ok_empty()
         }
-        Request::New { name, mode } => {
+        Request::New { name, mode, .. } => {
             let mut mgr = manager.lock().await;
             let session = mgr.create_session(name, mode, None, None);
             let id = session.id.clone();

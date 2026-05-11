@@ -99,6 +99,8 @@ impl ClaudioApp {
                             &Request::New {
                                 name: Some(ps.name),
                                 mode: SessionMode::Speaking,
+                                cwd: None,
+                                command: None,
                             },
                         );
                     }
@@ -258,6 +260,8 @@ impl ClaudioApp {
                     &Request::New {
                         name: None,
                         mode: SessionMode::Speaking,
+                        cwd: None,
+                        command: None,
                     },
                 );
             })
@@ -279,6 +283,8 @@ impl ClaudioApp {
                     &Request::New {
                         name: None,
                         mode: SessionMode::Speaking,
+                        cwd: None,
+                        command: None,
                     },
                 );
             })
@@ -519,6 +525,8 @@ impl ClaudioApp {
                                 &Request::New {
                                     name: Some(name),
                                     mode: SessionMode::Speaking,
+                                    cwd: None,
+                                    command: None,
                                 },
                             );
                         }
@@ -839,6 +847,8 @@ impl ClaudioApp {
                     &Request::New {
                         name: None,
                         mode: SessionMode::Speaking,
+                        cwd: None,
+                        command: None,
                     },
                 );
             })
@@ -937,6 +947,8 @@ impl ClaudioApp {
                             &Request::New {
                                 name: Some(name),
                                 mode: SessionMode::Speaking,
+                                cwd: None,
+                                command: None,
                             },
                         ) {
                             tracing::error!("IPC send_command failed for worktree session: {e}");

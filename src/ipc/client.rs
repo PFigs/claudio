@@ -46,7 +46,16 @@ pub async fn send_new_session(
     name: Option<String>,
     mode: SessionMode,
 ) -> Result<SessionInfo> {
-    let resp = send_request(socket_path, &Request::New { name, mode }).await?;
+    let resp = send_request(
+        socket_path,
+        &Request::New {
+            name,
+            mode,
+            cwd: None,
+            command: None,
+        },
+    )
+    .await?;
     match into_result(resp)? {
         ResponseData::Session(info) => Ok(info),
         _ => Err(anyhow::anyhow!("unexpected response")),
