@@ -1,3 +1,4 @@
+mod activity_bar;
 mod app;
 mod file_tree;
 mod ipc_bridge;

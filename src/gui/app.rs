@@ -37,6 +37,7 @@ pub struct ClaudioApp {
     pub grid_col_ratios: Vec<f32>,
     pub grid_row_ratios: Vec<f32>,
     pub grid_resize: Option<GridResize>,
+    pub active_activity: super::activity_bar::Activity,
 }
 
 impl ClaudioApp {
@@ -133,7 +134,17 @@ impl ClaudioApp {
             grid_col_ratios: Vec::new(),
             grid_row_ratios: Vec::new(),
             grid_resize: None,
+            active_activity: super::activity_bar::Activity::Files,
         }
+    }
+
+    pub fn set_active_activity(
+        &mut self,
+        activity: super::activity_bar::Activity,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_activity = activity;
+        cx.notify();
     }
 
     fn handle_daemon_event(&mut self, event: DaemonEvent, cx: &mut Context<Self>) {
@@ -991,6 +1002,18 @@ impl ClaudioApp {
 }
 
 impl ClaudioApp {
+    pub fn render_orchestrator_sidebar(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .w(px(self.file_tree_width))
+            .h_full()
+            .child("Orchestrator (coming soon)")
+            .into_any_element()
+    }
+
     fn render_resize_borders(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let border = px(6.0);
         let corner = px(12.0);
@@ -1129,11 +1152,23 @@ impl Render for ClaudioApp {
                 app.grid_resize = None;
             }))
             .child({
-                let mut content = div().flex_1().min_h(px(0.0)).flex().flex_row();
-                if self.file_tree.visible {
-                    content = content.child(self.render_file_tree(window, cx));
-                    // Resize handle
-                    content = content.child(
+                let sidebar_pane: AnyElement = match self.active_activity {
+                    super::activity_bar::Activity::Files => {
+                        self.render_file_tree(window, cx)
+                    }
+                    super::activity_bar::Activity::Orchestrator => {
+                        self.render_orchestrator_sidebar(window, cx)
+                    }
+                };
+
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .flex()
+                    .flex_row()
+                    .child(self.render_activity_bar(window, cx))
+                    .child(sidebar_pane)
+                    .child(
                         div()
                             .w(px(4.0))
                             .h_full()
@@ -1143,12 +1178,10 @@ impl Render for ClaudioApp {
                             .on_mouse_down(MouseButton::Left, cx.listener(|app, _ev: &MouseDownEvent, _window, _cx| {
                                 app.file_tree_resizing = true;
                             })),
-                    );
-                }
-                content = content.child(
-                    div().flex_1().child(self.render_terminal_grid(window, cx)),
-                );
-                content
+                    )
+                    .child(
+                        div().flex_1().child(self.render_terminal_grid(window, cx)),
+                    )
             })
             .child(self.render_resize_borders(cx))
     }
