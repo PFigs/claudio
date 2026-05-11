@@ -3,6 +3,7 @@ mod app;
 mod file_tree;
 mod ipc_bridge;
 pub mod orchestrator_index;
+mod orchestrator_sidebar;
 mod session_state;
 mod status_bar;
 mod terminal_grid;
@@ -35,7 +36,13 @@ pub fn run(socket_path: &Path) -> Result<()> {
                 app_id: Some("claudio".into()),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| ClaudioApp::new(&socket, window, cx)),
+            |window, cx| {
+                cx.new(|cx| {
+                    let app = ClaudioApp::new(&socket, window, cx);
+                    app.on_mount(cx);
+                    app
+                })
+            },
         )
         .expect("Failed to open window");
     });

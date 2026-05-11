@@ -21,13 +21,13 @@ pub struct ClaudioApp {
     pub ptt_active: bool,
     pub vad_speaking: bool,
     pub last_transcription: Option<String>,
-    socket_path: PathBuf,
+    pub(super) socket_path: PathBuf,
     focus_handle: FocusHandle,
     needs_focus_sync: bool,
     pub file_tree: FileTree,
-    pending_session_cwds: VecDeque<PathBuf>,
-    pending_shell_modes: VecDeque<bool>,
-    pending_commands: VecDeque<Option<Vec<String>>>,
+    pub(super) pending_session_cwds: VecDeque<PathBuf>,
+    pub(super) pending_shell_modes: VecDeque<bool>,
+    pub(super) pending_commands: VecDeque<Option<Vec<String>>>,
     pub renaming_session_id: Option<String>,
     pub rename_input: String,
     pub pending_worktree_repo: Option<PathBuf>,
@@ -38,6 +38,7 @@ pub struct ClaudioApp {
     pub grid_row_ratios: Vec<f32>,
     pub grid_resize: Option<GridResize>,
     pub active_activity: super::activity_bar::Activity,
+    pub orchestrator: super::orchestrator_sidebar::OrchestratorState,
 }
 
 impl ClaudioApp {
@@ -135,7 +136,12 @@ impl ClaudioApp {
             grid_row_ratios: Vec::new(),
             grid_resize: None,
             active_activity: super::activity_bar::Activity::Files,
+            orchestrator: super::orchestrator_sidebar::OrchestratorState::new(),
         }
+    }
+
+    pub fn on_mount(&self, cx: &mut Context<Self>) {
+        self.start_orchestrator_poll(cx);
     }
 
     pub fn set_active_activity(
@@ -1002,18 +1008,6 @@ impl ClaudioApp {
 }
 
 impl ClaudioApp {
-    pub fn render_orchestrator_sidebar(
-        &self,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> AnyElement {
-        div()
-            .w(px(self.file_tree_width))
-            .h_full()
-            .child("Orchestrator (coming soon)")
-            .into_any_element()
-    }
-
     fn render_resize_borders(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let border = px(6.0);
         let corner = px(12.0);
