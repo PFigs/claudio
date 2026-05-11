@@ -45,14 +45,16 @@ pub async fn send_new_session(
     socket_path: &Path,
     name: Option<String>,
     mode: SessionMode,
+    cwd: Option<std::path::PathBuf>,
+    command: Option<Vec<String>>,
 ) -> Result<SessionInfo> {
     let resp = send_request(
         socket_path,
         &Request::New {
             name,
             mode,
-            cwd: None,
-            command: None,
+            cwd,
+            command,
         },
     )
     .await?;

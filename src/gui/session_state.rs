@@ -233,6 +233,7 @@ impl SessionState {
         info: SessionInfo,
         cwd: Option<PathBuf>,
         shell_mode: bool,
+        command: Option<Vec<String>>,
         socket_path: PathBuf,
         cx: &mut gpui::Context<super::app::ClaudioApp>,
     ) -> Self {
@@ -247,12 +248,23 @@ impl SessionState {
             .expect("Failed to create PTY");
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let mut cmd = CommandBuilder::new(&shell);
-        if shell_mode {
-            cmd.args(["-c", &format!("exec {}", shell)]);
+        let mut cmd = if let Some(ref argv) = command {
+            // External caller supplied a literal argv. Run it via the
+            // user's shell so the user gets a shell after the command
+            // exits -- matching the claude/exec $SHELL behaviour below.
+            let joined = shell_quote_argv(argv);
+            let mut c = CommandBuilder::new(&shell);
+            c.args(["-c", &format!("{joined}; exec {shell}")]);
+            c
+        } else if shell_mode {
+            let mut c = CommandBuilder::new(&shell);
+            c.args(["-c", &format!("exec {}", shell)]);
+            c
         } else {
-            cmd.args(["-c", &format!("claude; exec {}", shell)]);
-        }
+            let mut c = CommandBuilder::new(&shell);
+            c.args(["-c", &format!("claude; exec {}", shell)]);
+            c
+        };
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         if let Some(ref dir) = cwd {
@@ -354,6 +366,17 @@ impl SessionState {
             let _ = w.flush();
         }
     }
+}
+
+/// Quote each argv element for a single `sh -c` line.
+fn shell_quote_argv(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| {
+            let escaped = a.replace('\'', "'\\''");
+            format!("'{escaped}'")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn default_palette() -> ColorPalette {

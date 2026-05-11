@@ -37,6 +37,10 @@ pub enum DaemonEvent {
     },
     SessionCreated {
         session: SessionInfo,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<std::path::PathBuf>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<Vec<String>>,
     },
     SessionDestroyed {
         session_id: String,

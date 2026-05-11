@@ -27,6 +27,7 @@ pub struct ClaudioApp {
     pub file_tree: FileTree,
     pending_session_cwds: VecDeque<PathBuf>,
     pending_shell_modes: VecDeque<bool>,
+    pending_commands: VecDeque<Option<Vec<String>>>,
     pub renaming_session_id: Option<String>,
     pub rename_input: String,
     pub pending_worktree_repo: Option<PathBuf>,
@@ -82,6 +83,7 @@ impl ClaudioApp {
         // Restore sessions from previous run
         let mut pending_session_cwds = VecDeque::new();
         let mut pending_shell_modes = VecDeque::new();
+        let mut pending_commands: VecDeque<Option<Vec<String>>> = VecDeque::new();
         let restore_socket = socket_path.to_path_buf();
         let persisted_sessions = state.gui.sessions.clone();
         if !persisted_sessions.is_empty() {
@@ -90,6 +92,7 @@ impl ClaudioApp {
             for ps in &persisted_sessions {
                 pending_session_cwds.push_back(ps.cwd.clone().unwrap_or_else(|| default_cwd.clone()));
                 pending_shell_modes.push_back(ps.shell_mode);
+                pending_commands.push_back(None);
             }
             cx.background_executor()
                 .spawn(async move {
@@ -120,6 +123,7 @@ impl ClaudioApp {
             file_tree,
             pending_session_cwds,
             pending_shell_modes,
+            pending_commands,
             renaming_session_id: None,
             rename_input: String::new(),
             pending_worktree_repo: None,
@@ -165,11 +169,27 @@ impl ClaudioApp {
                 }
                 cx.notify();
             }
-            DaemonEvent::SessionCreated { session } => {
+            DaemonEvent::SessionCreated {
+                session,
+                cwd,
+                command,
+            } => {
                 if !self.sessions.iter().any(|s| s.id == session.id) {
-                    let cwd = self.pending_session_cwds.pop_front();
+                    // Prefer event-supplied cwd/command (external CLI caller)
+                    // over the queue (GUI-initiated). Queues are FIFO matched
+                    // against GUI-issued New requests.
+                    let cwd = cwd.or_else(|| self.pending_session_cwds.pop_front());
+                    let command =
+                        command.or_else(|| self.pending_commands.pop_front().flatten());
                     let shell_mode = self.pending_shell_modes.pop_front().unwrap_or(false);
-                    let state = SessionState::new_with_cwd(session, cwd, shell_mode, self.socket_path.clone(), cx);
+                    let state = SessionState::new_with_cwd(
+                        session,
+                        cwd,
+                        shell_mode,
+                        command,
+                        self.socket_path.clone(),
+                        cx,
+                    );
                     self.sessions.push(state);
                     self.save_state();
                 }
@@ -252,6 +272,7 @@ impl ClaudioApp {
     fn new_session(&mut self, _: &NewSession, _window: &mut Window, cx: &mut Context<Self>) {
         self.pending_session_cwds.push_back(self.default_cwd());
         self.pending_shell_modes.push_back(false);
+        self.pending_commands.push_back(None);
         let socket = self.socket_path.clone();
         cx.background_executor()
             .spawn(async move {
@@ -275,6 +296,7 @@ impl ClaudioApp {
     pub fn create_shell_session(&mut self, cx: &mut Context<Self>) {
         self.pending_session_cwds.push_back(self.default_cwd());
         self.pending_shell_modes.push_back(true);
+        self.pending_commands.push_back(None);
         let socket = self.socket_path.clone();
         cx.background_executor()
             .spawn(async move {
@@ -514,6 +536,7 @@ impl ClaudioApp {
                             ps.cwd.clone().unwrap_or_else(|| default_cwd.clone()),
                         );
                         app.pending_shell_modes.push_back(ps.shell_mode);
+                        app.pending_commands.push_back(None);
                     }
                 });
                 let create_socket = socket.clone();
@@ -839,6 +862,7 @@ impl ClaudioApp {
     pub fn new_session_in_dir(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
         self.pending_session_cwds.push_back(dir);
         self.pending_shell_modes.push_back(false);
+        self.pending_commands.push_back(None);
         let socket = self.socket_path.clone();
         cx.background_executor()
             .spawn(async move {
@@ -889,6 +913,7 @@ impl ClaudioApp {
 
         self.pending_session_cwds.push_back(worktree_dir.clone());
         self.pending_shell_modes.push_back(false);
+        self.pending_commands.push_back(None);
 
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
             let git_ok = cx.background_executor()
