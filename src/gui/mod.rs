@@ -2,6 +2,7 @@ mod activity_bar;
 mod app;
 mod file_tree;
 mod ipc_bridge;
+pub mod orchestrator_index;
 mod session_state;
 mod status_bar;
 mod terminal_grid;
