@@ -14,6 +14,7 @@ Voice-activated terminal session manager for [Claude Code](https://docs.anthropi
 - **File browser** -- resizable sidebar with multi-root folder navigation. Click files to open in your editor (`$VISUAL` / `$EDITOR` / `zed`).
 - **Desktop notifications** -- terminal output is scanned for approval prompts ("do you want to proceed", "allow once", etc.) and triggers a `notify-send` notification so you don't miss them.
 - **Git worktrees** -- right-click a repo folder to create a named worktree with its own session and branch.
+- **Orchestrator integration** -- the `/orchestrator` Claude Code skill can spawn its feature sessions directly into claudio's PTY grid. The new `Orchestrator` activity (icon `O` in the left rail, or `Ctrl+Shift+O`) lists every active feature pulled from `~/.claude/orchestrator/<repo>/<feature>/STATUS.md`, with state badges, last log line, and a blocker indicator when the spawned session has open questions. Click a row to focus its tile or spawn one if it's not running yet. CLI form: `claudio new --cwd <path> --mode listening -- claude "Read <starter>"`.
 - **Resizable grid** -- drag borders between terminal panes to resize them.
 
 ## Install
