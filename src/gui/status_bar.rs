@@ -14,25 +14,7 @@ impl ClaudioApp {
             .items_center()
             .bg(rgb(theme::MANTLE))
             .px(px(12.0))
-            .gap(px(8.0))
-            .child(
-                div()
-                    .id("sidebar-toggle")
-                    .child("claudio")
-                    .text_color(if self.file_tree.visible {
-                        rgb(theme::BLUE)
-                    } else {
-                        rgb(theme::TEXT)
-                    })
-                    .text_size(px(14.0))
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(theme::BLUE)))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|app, _ev, _window, cx| {
-                        app.file_tree.toggle_visible();
-                        cx.notify();
-                    })),
-            )
-            .child(div().w(px(16.0)));
+            .gap(px(8.0));
 
         // Session pills
         for session in &self.sessions {

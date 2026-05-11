@@ -35,6 +35,14 @@ pub enum Command {
         /// Session mode
         #[arg(short, long, default_value = "speaking")]
         mode: SessionMode,
+        /// Working directory for the new session's PTY
+        #[arg(long)]
+        cwd: Option<std::path::PathBuf>,
+        /// Command and args to run in the PTY (everything after `--`).
+        /// Example: claudio new --cwd /tmp -- claude "Read foo.md"
+        /// If omitted, the existing default (claude; exec $SHELL) is used.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
     },
     /// List all sessions
     List,
@@ -103,12 +111,24 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             let config = crate::config::Config::load()?;
             crate::gui::run(&config.socket_path())
         }
-        Some(Command::New { name, mode }) => {
+        Some(Command::New {
+            name,
+            mode,
+            cwd,
+            command,
+        }) => {
             let config = crate::config::Config::load()?;
+            let cmd = if command.is_empty() {
+                None
+            } else {
+                Some(command)
+            };
             let resp = crate::ipc::client::send_new_session(
                 &config.socket_path(),
                 name,
                 mode,
+                cwd,
+                cmd,
             )
             .await?;
             println!("Created session: {} ({})", resp.name, resp.id);

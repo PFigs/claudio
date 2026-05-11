@@ -11,6 +11,10 @@ pub enum Request {
     New {
         name: Option<String>,
         mode: SessionMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<std::path::PathBuf>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<Vec<String>>,
     },
     List,
     Focus {
@@ -72,5 +76,36 @@ impl Response {
 
     pub fn ok_empty() -> Self {
         Self::ok(ResponseData::Empty {})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_request_serializes_cwd_and_command() {
+        let req = Request::New {
+            name: Some("feature-x".into()),
+            mode: SessionMode::Listening,
+            cwd: Some("/tmp/wt".into()),
+            command: Some(vec!["claude".into(), "Read starter.md".into()]),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Request::New { .. }));
+    }
+
+    #[test]
+    fn new_request_back_compat_without_cwd_or_command() {
+        let json = r#"{"cmd":"new","name":"foo","mode":"speaking"}"#;
+        let parsed: Request = serde_json::from_str(json).unwrap();
+        match parsed {
+            Request::New { cwd, command, .. } => {
+                assert!(cwd.is_none());
+                assert!(command.is_none());
+            }
+            _ => panic!("expected New"),
+        }
     }
 }

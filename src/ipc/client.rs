@@ -45,8 +45,19 @@ pub async fn send_new_session(
     socket_path: &Path,
     name: Option<String>,
     mode: SessionMode,
+    cwd: Option<std::path::PathBuf>,
+    command: Option<Vec<String>>,
 ) -> Result<SessionInfo> {
-    let resp = send_request(socket_path, &Request::New { name, mode }).await?;
+    let resp = send_request(
+        socket_path,
+        &Request::New {
+            name,
+            mode,
+            cwd,
+            command,
+        },
+    )
+    .await?;
     match into_result(resp)? {
         ResponseData::Session(info) => Ok(info),
         _ => Err(anyhow::anyhow!("unexpected response")),

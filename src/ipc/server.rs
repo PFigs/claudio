@@ -209,9 +209,14 @@ async fn dispatch(
             let _ = shutdown_tx.send(true);
             Response::ok_empty()
         }
-        Request::New { name, mode } => {
+        Request::New {
+            name,
+            mode,
+            cwd,
+            command,
+        } => {
             let mut mgr = manager.lock().await;
-            let session = mgr.create_session(name, mode);
+            let session = mgr.create_session(name, mode, cwd.clone(), command.clone());
             let id = session.id.clone();
             let name = session.name.clone();
             let mode_str = session.mode.to_string();
@@ -225,6 +230,8 @@ async fn dispatch(
             };
             let _ = event_tx.send(DaemonEvent::SessionCreated {
                 session: info.clone(),
+                cwd,
+                command,
             });
             Response::ok(ResponseData::Session(info))
         }

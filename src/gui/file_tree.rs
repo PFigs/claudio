@@ -42,7 +42,6 @@ pub struct FileTree {
     pub roots: Vec<PathBuf>,
     pub worktree_roots: Vec<PathBuf>,
     pub expanded: HashSet<PathBuf>,
-    pub visible: bool,
     pub search_query: String,
     pub search_active: bool,
     pub show_files: bool,
@@ -55,16 +54,11 @@ impl FileTree {
             roots: Vec::new(),
             worktree_roots: Vec::new(),
             expanded: HashSet::new(),
-            visible: true,
             search_query: String::new(),
             search_active: false,
             show_files: true,
             show_folders: true,
         }
-    }
-
-    pub fn toggle_visible(&mut self) {
-        self.visible = !self.visible;
     }
 
     pub fn toggle_dir(&mut self, path: &PathBuf) {

@@ -18,7 +18,13 @@ impl SessionManager {
         }
     }
 
-    pub fn create_session(&mut self, name: Option<String>, mode: SessionMode) -> &Session {
+    pub fn create_session(
+        &mut self,
+        name: Option<String>,
+        mode: SessionMode,
+        cwd: Option<std::path::PathBuf>,
+        command: Option<Vec<String>>,
+    ) -> &Session {
         let id = uuid::Uuid::new_v4().to_string()[..8].to_string();
         let name = name.unwrap_or_else(|| {
             let mut idx = 0;
@@ -31,7 +37,7 @@ impl SessionManager {
             }
         });
 
-        let session = Session::new(id.clone(), name, mode);
+        let session = Session::new(id.clone(), name, mode, cwd, command);
         self.sessions.insert(id.clone(), session);
 
         // Auto-focus if this is the first session
@@ -116,5 +122,36 @@ impl SessionManager {
             1 => Ok(matches[0].to_string()),
             _ => bail!("ambiguous session identifier: {name_or_id}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn create_session_stores_cwd_and_command() {
+        let mut mgr = SessionManager::new();
+        let cwd = PathBuf::from("/tmp/orchestrator-x");
+        let cmd = vec!["claude".to_string(), "Read starter.md".to_string()];
+        let session = mgr.create_session(
+            Some("feature-x".to_string()),
+            SessionMode::Listening,
+            Some(cwd.clone()),
+            Some(cmd.clone()),
+        );
+        assert_eq!(session.cwd.as_ref(), Some(&cwd));
+        assert_eq!(session.command.as_ref(), Some(&cmd));
+        assert_eq!(session.name, "feature-x");
+        assert!(matches!(session.mode, SessionMode::Listening));
+    }
+
+    #[test]
+    fn create_session_defaults_cwd_and_command_to_none() {
+        let mut mgr = SessionManager::new();
+        let session = mgr.create_session(None, SessionMode::Speaking, None, None);
+        assert!(session.cwd.is_none());
+        assert!(session.command.is_none());
     }
 }

@@ -21,12 +21,13 @@ pub struct ClaudioApp {
     pub ptt_active: bool,
     pub vad_speaking: bool,
     pub last_transcription: Option<String>,
-    socket_path: PathBuf,
+    pub(super) socket_path: PathBuf,
     focus_handle: FocusHandle,
     needs_focus_sync: bool,
     pub file_tree: FileTree,
-    pending_session_cwds: VecDeque<PathBuf>,
-    pending_shell_modes: VecDeque<bool>,
+    pub(super) pending_session_cwds: VecDeque<PathBuf>,
+    pub(super) pending_shell_modes: VecDeque<bool>,
+    pub(super) pending_commands: VecDeque<Option<Vec<String>>>,
     pub renaming_session_id: Option<String>,
     pub rename_input: String,
     pub pending_worktree_repo: Option<PathBuf>,
@@ -36,6 +37,8 @@ pub struct ClaudioApp {
     pub grid_col_ratios: Vec<f32>,
     pub grid_row_ratios: Vec<f32>,
     pub grid_resize: Option<GridResize>,
+    pub active_activity: super::activity_bar::Activity,
+    pub orchestrator: super::orchestrator_sidebar::OrchestratorState,
 }
 
 impl ClaudioApp {
@@ -82,6 +85,7 @@ impl ClaudioApp {
         // Restore sessions from previous run
         let mut pending_session_cwds = VecDeque::new();
         let mut pending_shell_modes = VecDeque::new();
+        let mut pending_commands: VecDeque<Option<Vec<String>>> = VecDeque::new();
         let restore_socket = socket_path.to_path_buf();
         let persisted_sessions = state.gui.sessions.clone();
         if !persisted_sessions.is_empty() {
@@ -90,6 +94,7 @@ impl ClaudioApp {
             for ps in &persisted_sessions {
                 pending_session_cwds.push_back(ps.cwd.clone().unwrap_or_else(|| default_cwd.clone()));
                 pending_shell_modes.push_back(ps.shell_mode);
+                pending_commands.push_back(None);
             }
             cx.background_executor()
                 .spawn(async move {
@@ -99,6 +104,8 @@ impl ClaudioApp {
                             &Request::New {
                                 name: Some(ps.name),
                                 mode: SessionMode::Speaking,
+                                cwd: None,
+                                command: None,
                             },
                         );
                     }
@@ -118,6 +125,7 @@ impl ClaudioApp {
             file_tree,
             pending_session_cwds,
             pending_shell_modes,
+            pending_commands,
             renaming_session_id: None,
             rename_input: String::new(),
             pending_worktree_repo: None,
@@ -127,7 +135,22 @@ impl ClaudioApp {
             grid_col_ratios: Vec::new(),
             grid_row_ratios: Vec::new(),
             grid_resize: None,
+            active_activity: super::activity_bar::Activity::Files,
+            orchestrator: super::orchestrator_sidebar::OrchestratorState::new(),
         }
+    }
+
+    pub fn on_mount(&self, cx: &mut Context<Self>) {
+        self.start_orchestrator_poll(cx);
+    }
+
+    pub fn set_active_activity(
+        &mut self,
+        activity: super::activity_bar::Activity,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_activity = activity;
+        cx.notify();
     }
 
     fn handle_daemon_event(&mut self, event: DaemonEvent, cx: &mut Context<Self>) {
@@ -163,11 +186,27 @@ impl ClaudioApp {
                 }
                 cx.notify();
             }
-            DaemonEvent::SessionCreated { session } => {
+            DaemonEvent::SessionCreated {
+                session,
+                cwd,
+                command,
+            } => {
                 if !self.sessions.iter().any(|s| s.id == session.id) {
-                    let cwd = self.pending_session_cwds.pop_front();
+                    // Prefer event-supplied cwd/command (external CLI caller)
+                    // over the queue (GUI-initiated). Queues are FIFO matched
+                    // against GUI-issued New requests.
+                    let cwd = cwd.or_else(|| self.pending_session_cwds.pop_front());
+                    let command =
+                        command.or_else(|| self.pending_commands.pop_front().flatten());
                     let shell_mode = self.pending_shell_modes.pop_front().unwrap_or(false);
-                    let state = SessionState::new_with_cwd(session, cwd, shell_mode, self.socket_path.clone(), cx);
+                    let state = SessionState::new_with_cwd(
+                        session,
+                        cwd,
+                        shell_mode,
+                        command,
+                        self.socket_path.clone(),
+                        cx,
+                    );
                     self.sessions.push(state);
                     self.save_state();
                 }
@@ -250,6 +289,7 @@ impl ClaudioApp {
     fn new_session(&mut self, _: &NewSession, _window: &mut Window, cx: &mut Context<Self>) {
         self.pending_session_cwds.push_back(self.default_cwd());
         self.pending_shell_modes.push_back(false);
+        self.pending_commands.push_back(None);
         let socket = self.socket_path.clone();
         cx.background_executor()
             .spawn(async move {
@@ -258,6 +298,8 @@ impl ClaudioApp {
                     &Request::New {
                         name: None,
                         mode: SessionMode::Speaking,
+                        cwd: None,
+                        command: None,
                     },
                 );
             })
@@ -271,6 +313,7 @@ impl ClaudioApp {
     pub fn create_shell_session(&mut self, cx: &mut Context<Self>) {
         self.pending_session_cwds.push_back(self.default_cwd());
         self.pending_shell_modes.push_back(true);
+        self.pending_commands.push_back(None);
         let socket = self.socket_path.clone();
         cx.background_executor()
             .spawn(async move {
@@ -279,6 +322,8 @@ impl ClaudioApp {
                     &Request::New {
                         name: None,
                         mode: SessionMode::Speaking,
+                        cwd: None,
+                        command: None,
                     },
                 );
             })
@@ -508,6 +553,7 @@ impl ClaudioApp {
                             ps.cwd.clone().unwrap_or_else(|| default_cwd.clone()),
                         );
                         app.pending_shell_modes.push_back(ps.shell_mode);
+                        app.pending_commands.push_back(None);
                     }
                 });
                 let create_socket = socket.clone();
@@ -519,6 +565,8 @@ impl ClaudioApp {
                                 &Request::New {
                                     name: Some(name),
                                     mode: SessionMode::Speaking,
+                                    cwd: None,
+                                    command: None,
                                 },
                             );
                         }
@@ -542,7 +590,17 @@ impl ClaudioApp {
     }
 
     fn toggle_file_tree(&mut self, _: &ToggleFileTree, _window: &mut Window, cx: &mut Context<Self>) {
-        self.file_tree.toggle_visible();
+        self.active_activity = super::activity_bar::Activity::Files;
+        cx.notify();
+    }
+
+    fn toggle_orchestrator(
+        &mut self,
+        _: &ToggleOrchestrator,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_activity = super::activity_bar::Activity::Orchestrator;
         cx.notify();
     }
 
@@ -552,9 +610,7 @@ impl ClaudioApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.file_tree.visible {
-            self.file_tree.visible = true;
-        }
+        self.active_activity = super::activity_bar::Activity::Files;
         self.file_tree.search_active = !self.file_tree.search_active;
         cx.notify();
     }
@@ -831,6 +887,7 @@ impl ClaudioApp {
     pub fn new_session_in_dir(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
         self.pending_session_cwds.push_back(dir);
         self.pending_shell_modes.push_back(false);
+        self.pending_commands.push_back(None);
         let socket = self.socket_path.clone();
         cx.background_executor()
             .spawn(async move {
@@ -839,6 +896,8 @@ impl ClaudioApp {
                     &Request::New {
                         name: None,
                         mode: SessionMode::Speaking,
+                        cwd: None,
+                        command: None,
                     },
                 );
             })
@@ -879,6 +938,7 @@ impl ClaudioApp {
 
         self.pending_session_cwds.push_back(worktree_dir.clone());
         self.pending_shell_modes.push_back(false);
+        self.pending_commands.push_back(None);
 
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
             let git_ok = cx.background_executor()
@@ -937,6 +997,8 @@ impl ClaudioApp {
                             &Request::New {
                                 name: Some(name),
                                 mode: SessionMode::Speaking,
+                                cwd: None,
+                                command: None,
                             },
                         ) {
                             tracing::error!("IPC send_command failed for worktree session: {e}");
@@ -1037,6 +1099,7 @@ impl Render for ClaudioApp {
             .on_action(cx.listener(Self::toggle_mode))
             .on_action(cx.listener(Self::minimize_session))
             .on_action(cx.listener(Self::toggle_file_tree))
+            .on_action(cx.listener(Self::toggle_orchestrator))
             .on_action(cx.listener(Self::focus_file_tree_search))
             .on_action(cx.listener(Self::add_folder))
             .on_action(cx.listener(Self::read_aloud))
@@ -1092,11 +1155,23 @@ impl Render for ClaudioApp {
                 app.grid_resize = None;
             }))
             .child({
-                let mut content = div().flex_1().min_h(px(0.0)).flex().flex_row();
-                if self.file_tree.visible {
-                    content = content.child(self.render_file_tree(window, cx));
-                    // Resize handle
-                    content = content.child(
+                let sidebar_pane: AnyElement = match self.active_activity {
+                    super::activity_bar::Activity::Files => {
+                        self.render_file_tree(window, cx)
+                    }
+                    super::activity_bar::Activity::Orchestrator => {
+                        self.render_orchestrator_sidebar(window, cx)
+                    }
+                };
+
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .flex()
+                    .flex_row()
+                    .child(self.render_activity_bar(window, cx))
+                    .child(sidebar_pane)
+                    .child(
                         div()
                             .w(px(4.0))
                             .h_full()
@@ -1106,12 +1181,10 @@ impl Render for ClaudioApp {
                             .on_mouse_down(MouseButton::Left, cx.listener(|app, _ev: &MouseDownEvent, _window, _cx| {
                                 app.file_tree_resizing = true;
                             })),
-                    );
-                }
-                content = content.child(
-                    div().flex_1().child(self.render_terminal_grid(window, cx)),
-                );
-                content
+                    )
+                    .child(
+                        div().flex_1().child(self.render_terminal_grid(window, cx)),
+                    )
             })
             .child(self.render_resize_borders(cx))
     }
