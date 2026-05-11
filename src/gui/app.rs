@@ -590,7 +590,17 @@ impl ClaudioApp {
     }
 
     fn toggle_file_tree(&mut self, _: &ToggleFileTree, _window: &mut Window, cx: &mut Context<Self>) {
-        self.file_tree.toggle_visible();
+        self.active_activity = super::activity_bar::Activity::Files;
+        cx.notify();
+    }
+
+    fn toggle_orchestrator(
+        &mut self,
+        _: &ToggleOrchestrator,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_activity = super::activity_bar::Activity::Orchestrator;
         cx.notify();
     }
 
@@ -600,9 +610,7 @@ impl ClaudioApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.file_tree.visible {
-            self.file_tree.visible = true;
-        }
+        self.active_activity = super::activity_bar::Activity::Files;
         self.file_tree.search_active = !self.file_tree.search_active;
         cx.notify();
     }
@@ -1091,6 +1099,7 @@ impl Render for ClaudioApp {
             .on_action(cx.listener(Self::toggle_mode))
             .on_action(cx.listener(Self::minimize_session))
             .on_action(cx.listener(Self::toggle_file_tree))
+            .on_action(cx.listener(Self::toggle_orchestrator))
             .on_action(cx.listener(Self::focus_file_tree_search))
             .on_action(cx.listener(Self::add_folder))
             .on_action(cx.listener(Self::read_aloud))
