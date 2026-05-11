@@ -211,7 +211,7 @@ async fn dispatch(
         }
         Request::New { name, mode } => {
             let mut mgr = manager.lock().await;
-            let session = mgr.create_session(name, mode);
+            let session = mgr.create_session(name, mode, None, None);
             let id = session.id.clone();
             let name = session.name.clone();
             let mode_str = session.mode.to_string();
