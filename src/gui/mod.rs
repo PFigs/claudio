@@ -21,6 +21,8 @@ use self::app::ClaudioApp;
 pub fn run(socket_path: &Path) -> Result<()> {
     let socket = socket_path.to_path_buf();
 
+    force_x11_on_gnome();
+
     let app = gpui::Application::new();
     app.run(move |cx: &mut gpui::App| {
         actions::register(cx);
@@ -48,4 +50,25 @@ pub fn run(socket_path: &Path) -> Result<()> {
     });
 
     Ok(())
+}
+
+// GNOME/Mutter refuses xdg-decoration server-side mode and GPUI does not draw
+// its own CSD, leaving the window chromeless. Routing through XWayland gets
+// SSD from mutter-x11-frames. Other Wayland compositors honor SSD natively.
+fn force_x11_on_gnome() {
+    if std::env::var_os("CLAUDIO_FORCE_WAYLAND").is_some() {
+        return;
+    }
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let on_gnome = desktop.split(':').any(|s| s.eq_ignore_ascii_case("GNOME"));
+    let on_wayland = std::env::var_os("WAYLAND_DISPLAY")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let has_x11 = std::env::var_os("DISPLAY")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    if on_gnome && on_wayland && has_x11 {
+        // SAFETY: called before gpui (and therefore any threads) start.
+        unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+    }
 }
