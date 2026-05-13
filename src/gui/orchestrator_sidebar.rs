@@ -9,6 +9,10 @@ use super::theme;
 pub struct OrchestratorState {
     pub features: Vec<FeatureSummary>,
     pub show_completed: bool,
+    /// feature_slug that's one click away from being deleted.
+    /// Set on first trash-button click, cleared on second click
+    /// (which executes) or when any other row is interacted with.
+    pub pending_delete: Option<String>,
 }
 
 impl OrchestratorState {
@@ -16,6 +20,7 @@ impl OrchestratorState {
         Self {
             features: Vec::new(),
             show_completed: false,
+            pending_delete: None,
         }
     }
 }
@@ -219,6 +224,37 @@ impl ClaudioApp {
             );
         }
 
+        if feature.is_completed() {
+            let is_pending =
+                self.orchestrator.pending_delete.as_deref() == Some(&feature.feature_slug);
+            let (label, color, bg) = if is_pending {
+                ("confirm", theme::CRUST, theme::RED)
+            } else {
+                ("del", theme::OVERLAY0, theme::SURFACE0)
+            };
+            let del_id: SharedString = format!("orch-del-{}", feature.feature_slug).into();
+            let slug_for_click = feature.feature_slug.clone();
+            top = top.child(
+                div()
+                    .id(del_id)
+                    .child(label)
+                    .text_color(rgb(color))
+                    .text_size(px(10.0))
+                    .px(px(4.0))
+                    .rounded(px(2.0))
+                    .bg(rgb(bg))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(theme::RED)).text_color(rgb(theme::CRUST)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |app, _ev: &MouseDownEvent, _window, cx| {
+                            cx.stop_propagation();
+                            app.handle_orchestrator_delete_click(&slug_for_click, cx);
+                        }),
+                    ),
+            );
+        }
+
         row = row.child(top).child(
             div()
                 .child(log_preview)
@@ -292,5 +328,103 @@ impl ClaudioApp {
                 let _ = super::ipc_bridge::send_command(&socket, &req);
             })
             .detach();
+    }
+
+    /// First click: arm the row for deletion (changes label to "confirm").
+    /// Second click on the same row: execute the delete.
+    /// Clicking a different row's button arms that row instead.
+    pub fn handle_orchestrator_delete_click(
+        &mut self,
+        feature_slug: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let armed = self.orchestrator.pending_delete.as_deref() == Some(feature_slug);
+        if armed {
+            self.execute_orchestrator_delete(feature_slug, cx);
+        } else {
+            self.orchestrator.pending_delete = Some(feature_slug.to_string());
+            cx.notify();
+        }
+    }
+
+    fn execute_orchestrator_delete(&mut self, feature_slug: &str, cx: &mut Context<Self>) {
+        let Some(feature) = self
+            .orchestrator
+            .features
+            .iter()
+            .find(|f| f.feature_slug == feature_slug)
+            .cloned()
+        else {
+            return;
+        };
+
+        let feature_dir = feature.status_path.parent().map(|p| p.to_path_buf());
+        let worktree = feature.worktree.clone();
+        let branch = feature.branch.clone();
+        let slug_for_log = feature_slug.to_string();
+
+        cx.background_executor()
+            .spawn(async move {
+                // Worktree dir convention is `<repo>/.worktree/<name>`, so the
+                // parent of the parent is the repo. `git worktree remove` from
+                // any worktree of the same repo works since .git is shared.
+                let repo = worktree
+                    .as_ref()
+                    .and_then(|w| w.parent())
+                    .and_then(|p| p.parent())
+                    .map(|p| p.to_path_buf());
+
+                if let (Some(ref wt), Some(ref repo)) = (worktree.as_ref(), repo.as_ref()) {
+                    if wt.exists() {
+                        let status = std::process::Command::new("git")
+                            .args(["worktree", "remove", "--force"])
+                            .arg(wt)
+                            .current_dir(repo)
+                            .status();
+                        match status {
+                            Ok(s) if s.success() => {
+                                tracing::info!(
+                                    "orchestrator: removed worktree {} for {slug_for_log}",
+                                    wt.display()
+                                );
+                            }
+                            Ok(s) => tracing::warn!(
+                                "orchestrator: git worktree remove for {slug_for_log} exited {s}"
+                            ),
+                            Err(e) => tracing::warn!(
+                                "orchestrator: git worktree remove for {slug_for_log} failed: {e}"
+                            ),
+                        }
+                    }
+                }
+
+                if let (Some(ref br), Some(ref repo)) = (branch.as_ref(), repo.as_ref()) {
+                    let status = std::process::Command::new("git")
+                        .args(["branch", "-D", br])
+                        .current_dir(repo)
+                        .status();
+                    if let Err(e) = status {
+                        tracing::warn!(
+                            "orchestrator: git branch -D {br} for {slug_for_log} failed: {e}"
+                        );
+                    }
+                }
+
+                if let Some(ref dir) = feature_dir {
+                    if let Err(e) = std::fs::remove_dir_all(dir) {
+                        tracing::warn!(
+                            "orchestrator: rm -rf {} for {slug_for_log} failed: {e}",
+                            dir.display()
+                        );
+                    }
+                }
+            })
+            .detach();
+
+        self.orchestrator.pending_delete = None;
+        self.orchestrator
+            .features
+            .retain(|f| f.feature_slug != feature_slug);
+        cx.notify();
     }
 }
