@@ -83,8 +83,7 @@ pub fn parse_status_text(text: &str, path: &Path) -> Result<FeatureSummary> {
     let last_log_line = stripped
         .body
         .lines()
-        .filter(|l| !l.trim().is_empty())
-        .last()
+        .rfind(|l| !l.trim().is_empty())
         .map(|l| l.trim_start_matches("- ").trim().to_string());
 
     let (repo, feature_slug) = derive_repo_and_feature(path)

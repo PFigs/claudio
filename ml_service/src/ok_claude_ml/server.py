@@ -4,15 +4,12 @@ import asyncio
 import logging
 import os
 import signal
-import struct
-import sys
 
 from .protocol import (
     MSG_PING,
     MSG_SYNTHESIZE,
     MSG_TRANSCRIBE,
     MSG_VAD_FEED,
-    HEADER_SIZE,
     read_frame,
     write_error,
     write_frame,
