@@ -109,17 +109,15 @@ impl PttListener {
                 let fetch_err = match device.fetch_events() {
                     Ok(events) => {
                         for ev in events {
-                            if ev.event_type() == EventType::KEY {
-                                if let InputEventKind::Key(k) = ev.kind() {
-                                    if k == key {
+                            if ev.event_type() == EventType::KEY
+                                && let InputEventKind::Key(k) = ev.kind()
+                                    && k == key {
                                         match ev.value() {
                                             1 => { let _ = tx.send(true); }   // press
                                             0 => { let _ = tx.send(false); }  // release
                                             _ => {}  // repeat, ignore
                                         }
                                     }
-                                }
-                            }
                         }
                         continue;
                     }
@@ -187,15 +185,14 @@ fn find_keyboard_device() -> Result<String> {
     for entry in std::fs::read_dir("/dev/input")? {
         let entry = entry?;
         let path = entry.path();
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if !name.starts_with("event") {
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && !name.starts_with("event") {
                 continue;
             }
-        }
 
-        if let Ok(device) = Device::open(&path) {
-            if let Some(keys) = device.supported_keys() {
-                if keys.contains(Key::KEY_A) && keys.contains(Key::KEY_Z) {
+        if let Ok(device) = Device::open(&path)
+            && let Some(keys) = device.supported_keys()
+                && keys.contains(Key::KEY_A) && keys.contains(Key::KEY_Z) {
                     info!(
                         "Auto-detected keyboard: {} ({})",
                         path.display(),
@@ -203,8 +200,6 @@ fn find_keyboard_device() -> Result<String> {
                     );
                     return Ok(path.to_string_lossy().into_owned());
                 }
-            }
-        }
     }
     bail!(
         "No keyboard device found in /dev/input/. \

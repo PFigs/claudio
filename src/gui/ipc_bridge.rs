@@ -42,11 +42,10 @@ fn run_subscription_inner(socket_path: &Path, tx: &flume::Sender<DaemonEvent>) -
             continue;
         }
 
-        if let Ok(event) = serde_json::from_str::<DaemonEvent>(trimmed) {
-            if tx.send(event).is_err() {
+        if let Ok(event) = serde_json::from_str::<DaemonEvent>(trimmed)
+            && tx.send(event).is_err() {
                 break; // GUI closed
             }
-        }
     }
 
     Ok(())

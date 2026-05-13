@@ -48,6 +48,7 @@ struct Frontmatter {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FeatureSummary {
     pub repo: String,
     pub feature_slug: String,

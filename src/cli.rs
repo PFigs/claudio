@@ -242,11 +242,10 @@ fn force_cleanup(config: &crate::config::Config) {
     let pid_path = config.pid_path();
 
     // Try to kill the daemon process from the PID file
-    if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+    if let Ok(pid_str) = std::fs::read_to_string(&pid_path)
+        && let Ok(pid) = pid_str.trim().parse::<i32>() {
             unsafe { libc::kill(pid, libc::SIGTERM); }
         }
-    }
 
     // Kill any lingering ok-claude-ml processes
     let _ = std::process::Command::new("pkill")
