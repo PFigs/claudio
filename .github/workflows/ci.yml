@@ -51,6 +51,4 @@ jobs:
 
       - name: Lint ML service
         working-directory: ml_service
-        run: |
-          uv sync
-          uv run ruff check .
+        run: uvx ruff check .

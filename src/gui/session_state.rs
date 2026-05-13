@@ -2,7 +2,6 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use gpui;
 use gpui::AppContext;
 use gpui_terminal::{ColorPalette, TerminalConfig, TerminalView};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};

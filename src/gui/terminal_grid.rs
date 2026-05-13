@@ -284,5 +284,5 @@ pub fn grid_rows(n: usize) -> usize {
         return 1;
     }
     let cols = grid_cols(n);
-    (n + cols - 1) / cols
+    n.div_ceil(cols)
 }
