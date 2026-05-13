@@ -202,11 +202,10 @@ impl ClaudioApp {
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, cx.listener(move |app, _ev, _window, cx| {
                 let id = session_id.clone();
-                if is_minimized {
-                    if let Some(s) = app.sessions.iter_mut().find(|s| s.id == id) {
+                if is_minimized
+                    && let Some(s) = app.sessions.iter_mut().find(|s| s.id == id) {
                         s.minimized = false;
                     }
-                }
                 app.focus_session_by_id(&id, cx);
             }))
             .on_mouse_down(MouseButton::Right, cx.listener(move |app, _ev: &MouseDownEvent, _window, cx| {
@@ -231,11 +230,10 @@ impl ClaudioApp {
                             .cursor_pointer()
                             .hover(|s| s.text_color(rgb(theme::BLUE)))
                             .on_mouse_down(MouseButton::Left, cx.listener(move |app, _ev, _window, _cx| {
-                                if let Some(session) = app.sessions.iter().find(|s| s.id == session_id_editor) {
-                                    if let Some(ref cwd) = session.cwd {
+                                if let Some(session) = app.sessions.iter().find(|s| s.id == session_id_editor)
+                                    && let Some(ref cwd) = session.cwd {
                                         app.open_in_editor(cwd);
                                     }
-                                }
                             })),
                     )
                     .child(

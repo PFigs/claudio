@@ -177,13 +177,12 @@ impl ClaudioApp {
                 if !text.is_empty() {
                     self.last_transcription = Some(text.clone());
                 }
-                if let Some(session) = self.sessions.iter().find(|s| s.id == session_id) {
-                    if !text.is_empty() {
+                if let Some(session) = self.sessions.iter().find(|s| s.id == session_id)
+                    && !text.is_empty() {
                         // Write text to terminal without auto-submitting.
                         // User reviews and presses Enter manually.
                         session.write_raw(&text);
                     }
-                }
                 cx.notify();
             }
             DaemonEvent::SessionCreated {
@@ -261,12 +260,11 @@ impl ClaudioApp {
             return;
         }
         self.needs_focus_sync = false;
-        if let Some(ref id) = self.focused_session_id {
-            if let Some(session) = self.sessions.iter().find(|s| &s.id == id) {
+        if let Some(ref id) = self.focused_session_id
+            && let Some(session) = self.sessions.iter().find(|s| &s.id == id) {
                 let handle = session.terminal_view.read(cx).focus_handle().clone();
                 window.focus(&handle);
             }
-        }
     }
 
     pub fn focus_session_by_id(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -453,13 +451,12 @@ impl ClaudioApp {
             let config = crate::config::Config::load().ok();
             if let Some(ref config) = config {
                 let pid_path = config.pid_path();
-                if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
-                    if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                if let Ok(pid_str) = std::fs::read_to_string(&pid_path)
+                    && let Ok(pid) = pid_str.trim().parse::<i32>() {
                         unsafe {
                             libc::kill(pid, libc::SIGTERM);
                         }
                     }
-                }
                 let _ = std::process::Command::new("pkill")
                     .args(["-f", "ok-claude-ml"])
                     .status();
@@ -480,8 +477,8 @@ impl ClaudioApp {
                 if let Some(parent) = log_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                if let Ok(log_file) = std::fs::File::create(&log_path) {
-                    if let Ok(log_file2) = log_file.try_clone() {
+                if let Ok(log_file) = std::fs::File::create(&log_path)
+                    && let Ok(log_file2) = log_file.try_clone() {
                         let _ = std::process::Command::new(exe)
                             .args(["start", "--foreground"])
                             .stdout(std::process::Stdio::from(log_file2))
@@ -489,7 +486,6 @@ impl ClaudioApp {
                             .stdin(std::process::Stdio::null())
                             .spawn();
                     }
-                }
             }
 
             // Wait for daemon to come up
@@ -620,13 +616,12 @@ impl ClaudioApp {
     }
 
     fn toggle_autopilot(&mut self, _: &ToggleAutopilot, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(ref id) = self.focused_session_id {
-            if let Some(session) = self.sessions.iter().find(|s| &s.id == id) {
+        if let Some(ref id) = self.focused_session_id
+            && let Some(session) = self.sessions.iter().find(|s| &s.id == id) {
                 let prev = session.autopilot.load(Ordering::Relaxed);
                 session.autopilot.store(!prev, Ordering::Relaxed);
                 cx.notify();
             }
-        }
     }
 
     fn stop_speech(&mut self, _: &StopSpeech, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -650,8 +645,8 @@ impl ClaudioApp {
             None
         };
 
-        if let Some(raw_text) = raw_text {
-            if !raw_text.trim().is_empty() {
+        if let Some(raw_text) = raw_text
+            && !raw_text.trim().is_empty() {
                 // Kill any ongoing speech
                 let _ = std::process::Command::new("pkill").arg("-f").arg("pw-play.*/tmp/claudio_tts").output();
 
@@ -711,7 +706,6 @@ impl ClaudioApp {
                     }
                 });
             }
-        }
     }
 
     fn default_cwd(&self) -> PathBuf {
@@ -760,11 +754,10 @@ impl ClaudioApp {
     }
 
     pub fn inject_text_to_focused(&self, text: &str) {
-        if let Some(ref id) = self.focused_session_id {
-            if let Some(session) = self.sessions.iter().find(|s| &s.id == id) {
+        if let Some(ref id) = self.focused_session_id
+            && let Some(session) = self.sessions.iter().find(|s| &s.id == id) {
                 session.write_raw(text);
             }
-        }
     }
 
     pub fn open_in_editor(&self, dir: &Path) {
@@ -831,12 +824,11 @@ impl ClaudioApp {
                     cx.notify();
                 }
                 _ => {
-                    if let Some(ch) = &ev.keystroke.key_char {
-                        if !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
+                    if let Some(ch) = &ev.keystroke.key_char
+                        && !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
                             self.worktree_name_input.push_str(ch);
                             cx.notify();
                         }
-                    }
                 }
             }
             return;
@@ -851,12 +843,11 @@ impl ClaudioApp {
                     cx.notify();
                 }
                 _ => {
-                    if let Some(ch) = &ev.keystroke.key_char {
-                        if !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
+                    if let Some(ch) = &ev.keystroke.key_char
+                        && !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
                             self.rename_input.push_str(ch);
                             cx.notify();
                         }
-                    }
                 }
             }
             return;
@@ -873,12 +864,11 @@ impl ClaudioApp {
                     cx.notify();
                 }
                 _ => {
-                    if let Some(ch) = &ev.keystroke.key_char {
-                        if !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
+                    if let Some(ch) = &ev.keystroke.key_char
+                        && !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
                             self.file_tree.search_query.push_str(ch);
                             cx.notify();
                         }
-                    }
                 }
             }
         }

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use super::mode::SessionMode;
 
 /// Daemon-side session metadata. PTYs are owned by the GUI process.
+#[allow(dead_code)]
 pub struct Session {
     pub id: String,
     pub name: String,

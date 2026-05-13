@@ -221,13 +221,12 @@ impl MlServiceProcess {
 
 impl Drop for MlServiceProcess {
     fn drop(&mut self) {
-        if let Some(ref mut child) = self.child {
-            if let Some(pid) = child.id() {
+        if let Some(ref mut child) = self.child
+            && let Some(pid) = child.id() {
                 unsafe {
                     libc::kill(pid as i32, libc::SIGTERM);
                 }
             }
-        }
     }
 }
 

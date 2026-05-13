@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Config {
     pub hotkey: HotkeyConfig,
     pub audio: AudioConfig,
@@ -38,6 +39,7 @@ pub struct SttConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct TtsConfig {
     pub model: Option<String>,
     pub voice: Option<String>,
@@ -45,6 +47,7 @@ pub struct TtsConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct DaemonConfig {
     pub socket_path: Option<String>,
     pub pid_file: Option<String>,
@@ -104,16 +107,12 @@ impl Config {
 /// GUI-specific configuration (user-authored).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct GuiConfig {
     /// Preferred editor command. Falls back to $VISUAL, then $EDITOR, then "code".
     pub editor: Option<String>,
 }
 
-impl Default for GuiConfig {
-    fn default() -> Self {
-        Self { editor: None }
-    }
-}
 
 impl GuiConfig {
     /// Resolve the editor command: config > $VISUAL > $EDITOR > "zed"
@@ -121,33 +120,18 @@ impl GuiConfig {
         if let Some(ref ed) = self.editor {
             return ed.clone();
         }
-        if let Ok(v) = std::env::var("VISUAL") {
-            if !v.is_empty() {
+        if let Ok(v) = std::env::var("VISUAL")
+            && !v.is_empty() {
                 return v;
             }
-        }
-        if let Ok(v) = std::env::var("EDITOR") {
-            if !v.is_empty() {
+        if let Ok(v) = std::env::var("EDITOR")
+            && !v.is_empty() {
                 return v;
             }
-        }
         "zed".to_string()
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            hotkey: HotkeyConfig::default(),
-            audio: AudioConfig::default(),
-            stt: SttConfig::default(),
-            tts: TtsConfig::default(),
-            daemon: DaemonConfig::default(),
-            tmux: TmuxConfig::default(),
-            gui: GuiConfig::default(),
-        }
-    }
-}
 
 impl Default for HotkeyConfig {
     fn default() -> Self {
@@ -177,24 +161,7 @@ impl Default for SttConfig {
     }
 }
 
-impl Default for TtsConfig {
-    fn default() -> Self {
-        Self {
-            model: None,
-            voice: None,
-        }
-    }
-}
 
-impl Default for DaemonConfig {
-    fn default() -> Self {
-        Self {
-            socket_path: None,
-            pid_file: None,
-            log_file: None,
-        }
-    }
-}
 
 impl Default for TmuxConfig {
     fn default() -> Self {
@@ -222,21 +189,13 @@ pub struct GuiState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct PersistedSession {
     pub name: String,
     pub cwd: Option<PathBuf>,
     pub shell_mode: bool,
 }
 
-impl Default for PersistedSession {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            cwd: None,
-            shell_mode: false,
-        }
-    }
-}
 
 impl AppState {
     pub fn state_path() -> PathBuf {

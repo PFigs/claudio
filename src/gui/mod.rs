@@ -13,7 +13,6 @@ mod theme;
 use std::path::Path;
 
 use anyhow::Result;
-use gpui;
 use gpui::AppContext;
 
 use self::app::ClaudioApp;

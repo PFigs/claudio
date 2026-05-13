@@ -38,8 +38,6 @@ class TextToSpeech:
 
     @staticmethod
     def _default_model_path() -> str:
-        import subprocess
-        import shutil
 
         # Try to find a piper model in common locations
         for path in [
