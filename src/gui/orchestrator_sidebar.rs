@@ -374,27 +374,27 @@ impl ClaudioApp {
                     .and_then(|p| p.parent())
                     .map(|p| p.to_path_buf());
 
-                if let (Some(ref wt), Some(ref repo)) = (worktree.as_ref(), repo.as_ref()) {
-                    if wt.exists() {
-                        let status = std::process::Command::new("git")
-                            .args(["worktree", "remove", "--force"])
-                            .arg(wt)
-                            .current_dir(repo)
-                            .status();
-                        match status {
-                            Ok(s) if s.success() => {
-                                tracing::info!(
-                                    "orchestrator: removed worktree {} for {slug_for_log}",
-                                    wt.display()
-                                );
-                            }
-                            Ok(s) => tracing::warn!(
-                                "orchestrator: git worktree remove for {slug_for_log} exited {s}"
-                            ),
-                            Err(e) => tracing::warn!(
-                                "orchestrator: git worktree remove for {slug_for_log} failed: {e}"
-                            ),
+                if let (Some(ref wt), Some(ref repo)) = (worktree.as_ref(), repo.as_ref())
+                    && wt.exists()
+                {
+                    let status = std::process::Command::new("git")
+                        .args(["worktree", "remove", "--force"])
+                        .arg(wt)
+                        .current_dir(repo)
+                        .status();
+                    match status {
+                        Ok(s) if s.success() => {
+                            tracing::info!(
+                                "orchestrator: removed worktree {} for {slug_for_log}",
+                                wt.display()
+                            );
                         }
+                        Ok(s) => tracing::warn!(
+                            "orchestrator: git worktree remove for {slug_for_log} exited {s}"
+                        ),
+                        Err(e) => tracing::warn!(
+                            "orchestrator: git worktree remove for {slug_for_log} failed: {e}"
+                        ),
                     }
                 }
 
@@ -410,13 +410,13 @@ impl ClaudioApp {
                     }
                 }
 
-                if let Some(ref dir) = feature_dir {
-                    if let Err(e) = std::fs::remove_dir_all(dir) {
-                        tracing::warn!(
-                            "orchestrator: rm -rf {} for {slug_for_log} failed: {e}",
-                            dir.display()
-                        );
-                    }
+                if let Some(ref dir) = feature_dir
+                    && let Err(e) = std::fs::remove_dir_all(dir)
+                {
+                    tracing::warn!(
+                        "orchestrator: rm -rf {} for {slug_for_log} failed: {e}",
+                        dir.display()
+                    );
                 }
             })
             .detach();
